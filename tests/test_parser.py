@@ -17,10 +17,10 @@ def grammar() -> Grammar:
     grammar.add_pattern(grammar.add_token('Whitespace', marks=(TokenMark.Trivia,)), r'\s+')
     grammar.add_pattern(grammar.add_token('Name'), r'[a-zA-Z_][a-zA-Z0-9]*')
     number_id = grammar.add_pattern(grammar.add_token('Number'), r'[0-9]+')
+    expr_id = grammar.add_parselet('expr', kind=ParseletKind.Pratt)
 
     implicit = grammar.add_implicit
 
-    expr_id = grammar.add_parselet('expr', kind=ParseletKind.Pratt)
     # expr := Number
     grammar.add_parser(expr_id, number_id)
     # expr := expr '+' expr
