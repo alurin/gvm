@@ -73,6 +73,14 @@ def test_add_trivia():
     assert grammar.trivia == {token_id}
 
 
+def test_add_idempotent_trivia():
+    grammar = Grammar()
+    token_id = grammar.add_token('Whitespace')
+    for _ in range(3):
+        grammar.add_trivia(token_id)
+        assert grammar.trivia == {token_id}
+
+
 def test_add_brackets():
     grammar = Grammar()
     open_id = grammar.add_implicit('(')
@@ -199,6 +207,32 @@ def test_extend_grammar():
     assert len(result.parselets) == 1
     assert len(result.patterns) == 5
     assert {pattern.pattern.pattern for pattern in result.patterns} == {'a+', '_a+', 'b+', '_b+', 'c+'}
+
+
+def test_extend_trivia_grammar():
+    grammar1 = Grammar()
+    grammar1.add_trivia(grammar1.add_token('A'))
+    grammar2 = Grammar()
+    grammar2.add_trivia(grammar2.add_token('A'))
+    grammar2.add_trivia(grammar2.add_token('B'))
+    result = Grammar.merge(grammar1, grammar2)
+    assert result.trivia == {
+        result.tokens['A'],
+        result.tokens['B'],
+    }
+
+
+def test_extend_brackets_grammar():
+    grammar1 = Grammar()
+    grammar1.add_brackets(grammar1.add_implicit('('), grammar1.add_implicit(')'))
+    grammar2 = Grammar()
+    grammar2.add_brackets(grammar2.add_implicit('('), grammar2.add_implicit(')'))
+    grammar2.add_brackets(grammar2.add_implicit('['), grammar2.add_implicit(']'))
+    result = Grammar.merge(grammar1, grammar2)
+    assert result.brackets == {
+        (result.tokens['['], result.tokens[']']),
+        (result.tokens['('], result.tokens[')'])
+    }
 
 
 def test_extend_fail_grammar():

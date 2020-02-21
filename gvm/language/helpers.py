@@ -5,6 +5,9 @@
 from gvm.core import create_core_grammar
 from gvm.language.combinators import make_sequence, make_repeat
 from gvm.language.grammar import Grammar
+from gvm.language.parser import Parser
+from gvm.language.scanner import DefaultScanner
+from gvm.locations import Location
 
 
 def create_combinator_grammar() -> Grammar:
@@ -45,3 +48,13 @@ def create_combinator_grammar() -> Grammar:
     grammar.add_parser(seq_id, make_sequence(comb_id, make_repeat(comb_id)))
 
     return grammar
+
+
+combinator_grammar = create_combinator_grammar()
+
+
+def parse_combinator(grammar: Grammar, content: str, location: Location = None):
+    # location = location or py_location(1)
+    scanner = DefaultScanner(combinator_grammar, '<example>', content)
+    parser = Parser(scanner)
+    return parser.parse(combinator_grammar.parselets['combinator_sequence'])

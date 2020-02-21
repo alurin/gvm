@@ -29,16 +29,22 @@ PRIORITY_MAX = sys.maxsize
 PRIORITY_MIN = 0
 
 
-@attr.dataclass(hash=True, order=True, eq=True, frozen=True)
+@attr.dataclass(hash=True, order=True, eq=True, frozen=True, repr=False)
 class SymbolID:
     id: int = attr.attrib(hash=True, order=False, eq=True)
     name: str = attr.attrib(hash=False, order=False, eq=False)
-    location: Location
+    location: Location = attr.attrib(hash=False, order=False, eq=False, repr=False)
+
+    def __repr__(self) -> str:
+        return self.name
+
+    def __str__(self) -> str:
+        return self.name
 
 
 @attr.dataclass(frozen=True)
 class TokenID(SymbolID):
-    description: str = attr.attrib(hash=False, order=False, eq=False)
+    description: str = attr.attrib(hash=False, order=False, eq=False, repr=False)
 
 
 class ParseletKind(enum.IntEnum):
@@ -48,7 +54,7 @@ class ParseletKind(enum.IntEnum):
 
 @attr.dataclass(frozen=True)
 class ParseletID(SymbolID):
-    kind: ParseletKind
+    kind: ParseletKind = attr.attrib(hash=False, order=False, eq=False, repr=False)
 
 
 @attr.dataclass(order=True, frozen=True)
@@ -192,8 +198,10 @@ class Grammar:
             -> AbstractParselet:
         location = location or py_location(2)
         if isinstance(combinator, str):
-            raise NotImplementedError('Not implemented conversion string to parser combinator')
-        combinator = flat_combinator(combinator)
+            from gvm.language.helpers import parse_combinator
+            combinator = parse_combinator(self, combinator, location)
+        else:
+            combinator = flat_combinator(combinator)
 
         return self.tables[parser_id].add_parser(combinator, priority, location)
 
@@ -221,7 +229,11 @@ class Grammar:
 
         # merge trivia
         for token_id in grammar.trivia:
-            self.tri
+            self.add_trivia(cast(TokenID, symbols[token_id]))
+
+        # merge brackets
+        for open_id, close_id in grammar.brackets:
+            self.add_brackets(open_id, close_id)
 
         # merge token patterns
         for pattern in grammar.patterns:
