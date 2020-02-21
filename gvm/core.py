@@ -4,7 +4,7 @@
 # of the MIT license. See the LICENSE file for details.
 from tokenize import group as re_group, maybe as re_maybe
 
-from gvm.language.grammar import Grammar, TokenMark
+from gvm.language.grammar import Grammar
 
 RE_COMMENT = r'#[^\r\n]*'
 RE_WHITESPACE = r'[ \f\t]+'
@@ -25,8 +25,8 @@ RE_STRING_DOUBLE = r'"[^\n"\\]*(?:\\.[^\n"\\]*)*"'
 def create_core_grammar() -> Grammar:
     """ This function is used for initialize default grammar """
     grammar = Grammar()
-    grammar.add_pattern(grammar.add_token('Comment', marks=(TokenMark.Trivia,)), RE_COMMENT)
-    grammar.add_pattern(grammar.add_token('Whitespace', marks=(TokenMark.Trivia,)), RE_WHITESPACE)
+    grammar.add_pattern(grammar.add_token('Comment'), RE_COMMENT)
+    grammar.add_pattern(grammar.add_token('Whitespace'), RE_WHITESPACE)
     grammar.add_pattern(grammar.add_token('Name'), RE_NAME)
     grammar.add_pattern(grammar.add_token('NewLine'), RE_NEWLINE)
     grammar.add_pattern(grammar.add_token('String'), RE_STRING_SINGLE)
@@ -37,11 +37,17 @@ def create_core_grammar() -> Grammar:
     grammar.add_pattern(grammar.add_token('Integer'), RE_NUMBER_HEXADECIMAL)
     grammar.add_pattern(grammar.add_token('Float'), RE_FLOAT_POINT)
     grammar.add_pattern(grammar.add_token('Float'), RE_FLOAT_EXPONENT)
-    grammar.add_implicit('(', marks=(TokenMark.OpenBracket,))
-    grammar.add_implicit(')', marks=(TokenMark.CloseBracket,))
-    grammar.add_implicit('[', marks=(TokenMark.OpenBracket,))
-    grammar.add_implicit(']', marks=(TokenMark.CloseBracket,))
-    grammar.add_implicit('{', marks=(TokenMark.OpenBracket,))
-    grammar.add_implicit('}', marks=(TokenMark.CloseBracket,))
+    grammar.add_implicit('(')
+    grammar.add_implicit(')')
+    grammar.add_implicit('[')
+    grammar.add_implicit(']')
+    grammar.add_implicit('{')
+    grammar.add_implicit('}')
+
+    grammar.add_trivia(grammar.tokens['Comment'])
+    grammar.add_trivia(grammar.tokens['Whitespace'])
+    grammar.add_brackets(grammar.tokens['('], grammar.tokens[')'])
+    grammar.add_brackets(grammar.tokens['['], grammar.tokens[']'])
+    grammar.add_brackets(grammar.tokens['{'], grammar.tokens['}'])
 
     return grammar

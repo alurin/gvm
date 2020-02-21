@@ -11,7 +11,7 @@ import enum
 import itertools
 import re
 import sys
-from typing import Mapping, Sequence, Tuple, Optional, Union, Pattern, Match, FrozenSet, cast, MutableMapping, Set
+from typing import Mapping, Sequence, Tuple, Optional, Union, Pattern, Match, cast, MutableMapping, Set, FrozenSet
 
 import attr
 
@@ -39,13 +39,6 @@ class SymbolID:
 @attr.dataclass(frozen=True)
 class TokenID(SymbolID):
     description: str = attr.attrib(hash=False, order=False, eq=False)
-
-
-class TokenMark(enum.IntEnum):
-    Default = enum.auto()
-    Trivia = enum.auto()
-    OpenBracket = enum.auto()
-    CloseBracket = enum.auto()
 
 
 class ParseletKind(enum.IntEnum):
@@ -81,7 +74,11 @@ class Grammar:
         self.__parselets = {}
         self.__patterns = []
         self.__tables = {}
-        self.__marks = collections.defaultdict(set)
+        self.__trivia = set()
+        self.__brackets = set()
+        self.__open_brackets = set()
+        self.__close_brackets = set()
+        self.__bracket_pairs = {}
 
         # default tokens
         self.add_token('<EOF>', description='end of file', is_implicit=True)
@@ -108,18 +105,32 @@ class Grammar:
         return self.__tables
 
     @property
-    def marks(self) -> Mapping[TokenMark, FrozenSet[TokenID]]:
-        return cast(Mapping[TokenMark, FrozenSet[TokenID]], self.__marks)
+    def trivia(self) -> FrozenSet[TokenID]:
+        return cast(FrozenSet[TokenID], self.__trivia)
 
-    def add_token(self, name: str, description: str = None, *, marks: Sequence[TokenMark] = None,
-                  is_implicit: bool = False, location: Location = None) -> TokenID:
+    @property
+    def brackets(self) -> FrozenSet[Tuple[TokenID, TokenID]]:
+        return cast(FrozenSet[Tuple[TokenID, TokenID]], self.__brackets)
+
+    @property
+    def open_brackets(self) -> FrozenSet[TokenID]:
+        return cast(FrozenSet[TokenID], self.__open_brackets)
+
+    @property
+    def close_brackets(self) -> FrozenSet[TokenID]:
+        return cast(FrozenSet[TokenID], self.__close_brackets)
+
+    @property
+    def bracket_pairs(self) -> Mapping[TokenID, TokenID]:
+        return self.__bracket_pairs
+
+    def add_token(self, name: str, description: str = None, *, is_implicit: bool = False,
+                  location: Location = None) -> TokenID:
         location = location or py_location(2)
         if not is_implicit and not RE_TOKEN.match(name):
             raise GrammarError(location, f'Symbol id for token must be: {RE_TOKEN.pattern}')
         if name in self.__tokens:
             token_id = self.__tokens[name]
-            if marks:
-                self.mark_token(token_id, marks)
             return token_id
         if name in self.__symbols:
             raise GrammarError(location, f'Already registered symbol id: {name}')
@@ -127,13 +138,7 @@ class Grammar:
         description = description or (name if is_implicit else camel_case_to_lower(name))
         token_id = TokenID(len(self.__symbols) + 1, name, location, description)
         self.__tokens[name] = self.__symbols[name] = token_id
-        if marks:
-            self.mark_token(token_id, marks)
         return token_id
-
-    def mark_token(self, token_id: TokenID, kinds: Sequence[TokenMark]):
-        for kind in kinds:
-            self.__marks[kind].add(token_id)
 
     def add_pattern(self, token_id: TokenID, pattern: str, *, priority: int = PRIORITY_MAX, location: Location = None) \
             -> TokenID:
@@ -141,10 +146,28 @@ class Grammar:
         bisect.insort_right(self.__patterns, SyntaxPattern(token_id, re.compile(pattern), priority, location))
         return token_id
 
-    def add_implicit(self, pattern: str, *, marks: Sequence[TokenMark] = None, location: Location = None) -> TokenID:
+    def add_implicit(self, pattern: str, *, location: Location = None) -> TokenID:
         location = location or py_location(2)
-        token_id = self.add_token(pattern, marks=marks, is_implicit=True, location=location)
+        token_id = self.add_token(pattern, is_implicit=True, location=location)
         return self.add_pattern(token_id, re.escape(pattern), priority=-len(pattern), location=location)
+
+    def add_trivia(self, token_id: TokenID):
+        self.__trivia.add(token_id)
+
+    def add_brackets(self, open_id: TokenID, close_id: TokenID):
+        """
+        Add open and close brackets.
+
+        Used for indentation scanner
+
+        :param open_id:
+        :param close_id:
+        :return:
+        """
+        self.__brackets.add((open_id, close_id))
+        self.__open_brackets.add(open_id)
+        self.__close_brackets.add(close_id)
+        self.__bracket_pairs[open_id] = close_id
 
     def add_parselet(self, name: str, *, kind: ParseletKind = ParseletKind.Packrat, location: Location = None) \
             -> ParseletID:
@@ -195,6 +218,10 @@ class Grammar:
                 symbols[parser_id] = self.add_parselet(parser_id.name, kind=parser_id.kind, location=parser_id.location)
             except GrammarError as ex:
                 raise attr.evolve(ex, location=location)
+
+        # merge trivia
+        for token_id in grammar.trivia:
+            self.tri
 
         # merge token patterns
         for pattern in grammar.patterns:

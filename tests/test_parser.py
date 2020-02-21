@@ -6,7 +6,7 @@ import pytest
 
 from gvm.language import DefaultScanner
 from gvm.language.combinators import make_sequence
-from gvm.language.grammar import Grammar, TokenMark, ParseletKind
+from gvm.language.grammar import Grammar, ParseletKind
 from gvm.language.parser import Parser, ParserError
 
 
@@ -14,7 +14,9 @@ from gvm.language.parser import Parser, ParserError
 def grammar() -> Grammar:
     grammar = Grammar()
 
-    grammar.add_pattern(grammar.add_token('Whitespace', marks=(TokenMark.Trivia,)), r'\s+')
+    whitespace_id = grammar.add_pattern(grammar.add_token('Whitespace'), r'\s+')
+    grammar.add_trivia(whitespace_id)
+
     grammar.add_pattern(grammar.add_token('Name'), r'[a-zA-Z_][a-zA-Z0-9]*')
     number_id = grammar.add_pattern(grammar.add_token('Number'), r'[0-9]+')
     expr_id = grammar.add_parselet('expr', kind=ParseletKind.Pratt)

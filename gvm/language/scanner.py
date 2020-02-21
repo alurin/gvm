@@ -7,7 +7,7 @@ from __future__ import annotations
 import collections
 from typing import Iterator, Optional
 
-from gvm.language.grammar import Grammar, TokenID, TokenMark
+from gvm.language.grammar import Grammar, TokenID
 from gvm.language.syntax import SyntaxToken
 from gvm.locations import Location
 
@@ -30,7 +30,6 @@ class Scanner:
         self.location = Location(filename)
         self.eof_id = grammar.tokens['<EOF>']
         self.error_id = grammar.tokens['<ERROR>']
-        self.trivia = grammar.marks[TokenMark.Trivia]
 
     def tokenize(self) -> Iterator[SyntaxToken]:
         while self.position < self.length:
@@ -84,7 +83,7 @@ class DefaultScanner(Scanner):
 
     def tokenize(self) -> Iterator[SyntaxToken]:
         for token in super().tokenize():
-            if token.id not in self.trivia:
+            if token.id not in self.grammar.trivia:
                 yield token
 
 
@@ -101,8 +100,6 @@ class IndentationScanner(Scanner):
         self.whitespace_id = grammar.add_token('Whitespace')
         self.indent_id = grammar.add_token('Indent')
         self.dedent_id = grammar.add_token('Dedend')
-        self.open_brackets = grammar.marks[TokenMark.OpenBracket]
-        self.close_brackets = grammar.marks[TokenMark.CloseBracket]
 
     def tokenize(self) -> Iterator[SyntaxToken]:
         indentations = collections.deque([0])
@@ -140,7 +137,7 @@ class IndentationScanner(Scanner):
                 yield token
                 continue
 
-            elif token.id in self.trivia:
+            elif token.id in self.grammar.trivia:
                 continue
 
             if is_new:
@@ -161,9 +158,9 @@ class IndentationScanner(Scanner):
                         indentations.pop()
 
             is_new = False
-            if token.id in self.open_brackets:
+            if token.id in self.grammar.open_brackets:
                 level += 1
-            elif token.id in self.close_brackets:
+            elif token.id in self.grammar.close_brackets:
                 level -= 1
 
             yield token

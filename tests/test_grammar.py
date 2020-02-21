@@ -65,6 +65,28 @@ def test_add_incorrect_token():
     assert len(grammar.symbols) == symbol_count, "Count of symbols in grammar is changed after failed call"
 
 
+def test_add_trivia():
+    grammar = Grammar()
+    token_id = grammar.add_token('Whitespace')
+    assert grammar.trivia == set()
+    grammar.add_trivia(token_id)
+    assert grammar.trivia == {token_id}
+
+
+def test_add_brackets():
+    grammar = Grammar()
+    open_id = grammar.add_implicit('(')
+    close_id = grammar.add_implicit(')')
+    assert grammar.brackets == set()
+    assert grammar.open_brackets == set()
+    assert grammar.close_brackets == set()
+    grammar.add_brackets(open_id, close_id)
+    assert grammar.brackets == {(open_id, close_id)}
+    assert grammar.open_brackets == {open_id}
+    assert grammar.close_brackets == {close_id}
+    assert grammar.bracket_pairs[open_id] == close_id
+
+
 def test_add_parselet():
     grammar = Grammar()
     symbol_count = len(grammar.symbols)

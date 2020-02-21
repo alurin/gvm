@@ -25,14 +25,15 @@ This version is used explicit definition of grammar (e.g. parselet definition is
 
 ```python
 from gvm.language.combinators import make_sequence
-from gvm.language.grammar import Grammar, TokenMark, ParseletKind
+from gvm.language.grammar import Grammar, ParseletKind
 
 grammar = Grammar()
 
-grammar.add_pattern(grammar.add_token('Whitespace', marks=(TokenMark.Trivia,)), r'\s+')
+grammar.add_pattern(grammar.add_token('Whitespace'), r'\s+')
 grammar.add_pattern(grammar.add_token('Name'), r'[a-zA-Z_][a-zA-Z0-9]*')
 number_id = grammar.add_pattern(grammar.add_token('Number'), r'[0-9]+')
 expr_id = grammar.add_parselet('expr', kind=ParseletKind.Pratt)
+grammar.add_trivia(grammar.tokens['Whitespace'])
 
 implicit = grammar.add_implicit
 

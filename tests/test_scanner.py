@@ -6,7 +6,7 @@ from typing import Sequence, Tuple
 
 import pytest
 
-from gvm.language.grammar import Grammar, TokenID, TokenMark
+from gvm.language.grammar import Grammar, TokenID
 from gvm.language.scanner import Scanner, DefaultScanner
 
 
@@ -18,7 +18,8 @@ def tokenize_to_tuple(scanner: Scanner) -> Sequence[Tuple[TokenID, str]]:
 def grammar() -> Grammar:
     grammar = Grammar()
 
-    grammar.add_pattern(grammar.add_token('Whitespace', marks=(TokenMark.Trivia,)), r'\s+')
+    whitespace_id = grammar.add_pattern(grammar.add_token('Whitespace'), r'\s+')
+    grammar.add_trivia(whitespace_id)
     grammar.add_pattern(grammar.add_token('Number'), r'[0-9]+')
     grammar.add_pattern(grammar.add_token('Name'), r'[a-zA-Z_][a-zA-Z0-9]+')
     grammar.add_implicit("for")
