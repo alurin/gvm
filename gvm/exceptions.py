@@ -7,19 +7,15 @@ from __future__ import absolute_import, annotations
 import io
 import itertools
 import os
+from io import StringIO
 from typing import TextIO, Tuple, Sequence, Optional
 
 import attr
 
 from gvm.locations import Location
+from gvm.writers import Color, Writer, create_writer
 
 DiagnosticLines = Sequence[Tuple[int, str]]
-
-ANSI_COLOR_RED = "\033[31m"
-ANSI_COLOR_GREEN = "\x1b[32m"
-ANSI_COLOR_BLUE = "\x1b[34m"
-ANSI_COLOR_CYAN = "\x1b[36m"
-ANSI_COLOR_RESET = "\x1b[0m"
 
 
 class GVMError(Exception):
@@ -41,11 +37,13 @@ class DiagnosticError(GVMError):
     message: str
     content: Optional[str] = None
 
-    def get_string(self, content: str = None):
-        return get_source_string(self.location, self.message, content or self.content)
+    def to_stream(self, stream: Writer, content: str = None):
+        dump_source_string(stream, self.location, self.message, content or self.content)
 
     def __str__(self) -> str:
-        return self.get_string()
+        stream = StringIO()
+        self.to_stream(create_writer(stream))
+        return stream.getvalue()
 
 
 def load_source_lines(location: Location, before: int = 2, after: int = 2) -> DiagnosticLines:
@@ -62,12 +60,17 @@ def select_source_lines(stream: TextIO, location: Location, before: int = 2, aft
     at_after = location.end.line + after
 
     results = []
-    for idx, line in itertools.islice(enumerate(stream), at_before, at_after - 2):
-        results.append((idx + 1, line.rstrip("\n")))
-    return results
+    for idx, line in itertools.islice(enumerate(stream), at_before, at_after):
+        line = line.rstrip("\n")
+        results.append((idx + 1, line))
+
+    begin = next((i for i, (_, x) in enumerate(results) if x.strip()), 0)
+    end = len(results) - next((i for i, (_, x) in enumerate(reversed(results)) if x.strip()), 0)
+
+    return results[begin: end]
 
 
-def show_source_lines(strings: DiagnosticLines, location: Location, columns: int = None):
+def dump_source_lines(stream: Writer, strings: DiagnosticLines, location: Location, columns: int = None):
     """
     Convert selected lines to error message, e.g.:
 
@@ -76,7 +79,6 @@ def show_source_lines(strings: DiagnosticLines, location: Location, columns: int
           : --------------------------^
     ```
     """
-    stream = io.StringIO()
     if not columns:
         try:
             _, columns = os.popen('stty size', 'r').read().split()
@@ -93,10 +95,7 @@ def show_source_lines(strings: DiagnosticLines, location: Location, columns: int
     for line, string in strings:
         s_line = str(line).rjust(width)
 
-        stream.write(ANSI_COLOR_CYAN)
-        stream.write(s_line)
-        stream.write(" : ")
-        stream.write(ANSI_COLOR_BLUE)
+        stream.write(s_line, " : ", color=Color.Cyan)
         for column, char in enumerate(string):
             column += 1
             is_error = False
@@ -106,18 +105,15 @@ def show_source_lines(strings: DiagnosticLines, location: Location, columns: int
                 is_error = is_error and column <= location.end.column
 
             if is_error:
-                stream.write(ANSI_COLOR_RED)
+                stream.write(char, color=Color.Red)
             else:
-                stream.write(ANSI_COLOR_GREEN)
-            stream.write(char)
-
-        stream.write(ANSI_COLOR_RESET)
+                stream.write(char, color=Color.Green)
         stream.write("\n")
 
         # write error line
         if location.begin.line <= line <= location.end.line:
-            stream.write("·" * width)
-            stream.write(" : ")
+            stream.write(" " * width)
+            stream.write(" : ", color=Color.Cyan)
 
             for column, char in itertools.chain(enumerate(string), ((len(string), None),)):
                 column += 1
@@ -129,22 +125,22 @@ def show_source_lines(strings: DiagnosticLines, location: Location, columns: int
                     is_error = is_error and column <= location.end.column
 
                 if is_error:
-                    stream.write(ANSI_COLOR_RED)
-                    stream.write("^")
-                    stream.write(ANSI_COLOR_RESET)
+                    stream.write("^", color=Color.Red)
                 elif char is not None:
-                    stream.write("·")
+                    stream.write(" ")
             stream.write("\n")
 
-    return stream.getvalue()
 
+def dump_source_string(stream: Writer, location: Location, message: str, content: str = None):
+    stream.write('[')
+    stream.write(str(location))
+    stream.write('] ')
+    stream.write(message, color=Color.Red)
+    stream.write('\n')
 
-def get_source_string(location: Location, message: str, content: str = None) -> str:
     if content:
         lines = select_source_lines(io.StringIO(content), location)
     else:
         lines = load_source_lines(location)
     if lines:
-        source = show_source_lines(lines, location)
-        return f"[{location}] {message}:\n{source}"
-    return f"[{location}] {message}"
+        dump_source_lines(stream, lines, location)

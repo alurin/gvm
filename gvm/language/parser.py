@@ -5,13 +5,15 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from io import StringIO
 from typing import Set, Optional, TYPE_CHECKING, MutableMapping, Tuple, Sequence
 
 import attr
 
-from gvm.exceptions import GVMError, get_source_string
+from gvm.exceptions import GVMError, dump_source_string
 from gvm.language.syntax import SyntaxToken
 from gvm.locations import Location
+from gvm.writers import Writer, create_writer
 
 if TYPE_CHECKING:
     from gvm.language.scanner import Scanner
@@ -167,11 +169,13 @@ class ParserError(SyntaxError):
         required_name = next(iter(self.expected_tokens), None).description
         return "Required ‘{}’, but got ‘{}’".format(required_name, self.actual_token.description)
 
-    def get_string(self, content: str = None) -> str:
-        return get_source_string(self.location, self.get_message(), content)
+    def to_stream(self, stream: Writer, content: str = None):
+        dump_source_string(stream, self.location, self.get_message(), content)
 
     def __str__(self) -> str:
-        return self.get_string()
+        stream = StringIO()
+        self.to_stream(create_writer(stream))
+        return stream.getvalue()
 
 
 class ParserConsumeNothingError(SyntaxError):

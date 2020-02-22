@@ -44,9 +44,9 @@ class Combinator(abc.ABC):
     def __call__(self, parser: Parser, context: Parselet) -> CombinatorResult:
         raise NotImplementedError
 
-    @abc.abstractmethod
     def __str__(self) -> str:
-        raise NotImplementedError
+        from gvm.language.printer import dump_combinator
+        return dump_combinator.to_string(self)
 
     def __repr__(self) -> str:
         class_name = type(self).__name__
@@ -80,11 +80,6 @@ class TokenCombinator(Combinator):
     def __call__(self, parser: Parser, context: Parselet) -> CombinatorResult:
         return parser.consume(self.token_id), {}, None
 
-    def __str__(self) -> str:
-        if self.token_id.is_implicit:
-            return repr(self.token_id.name)
-        return self.token_id.name
-
 
 @attr.dataclass(frozen=True, repr=False)
 class ParseletCombinator(Combinator):
@@ -104,11 +99,6 @@ class ParseletCombinator(Combinator):
     def __call__(self, parser: Parser, context: Parselet) -> CombinatorResult:
         result, error = parser.parselet(self.parser_id, self.priority)
         return result, {}, error
-
-    def __str__(self) -> str:
-        if self.priority:
-            return f'{self.parser_id.name} <{self.priority}>'
-        return self.parser_id.name
 
 
 @attr.dataclass(frozen=True, repr=False)
@@ -164,9 +154,6 @@ class SequenceCombinator(CollectionCombinator):
     def __call__(self, parser: Parser, context: Parselet) -> CombinatorResult:
         return sequence(parser, context, self.combinators)
 
-    def __str__(self) -> str:
-        return " ".join(map(str, self.combinators))
-
 
 @attr.dataclass(frozen=True, repr=False)
 class PostfixCombinator(SequenceCombinator):
@@ -216,11 +203,6 @@ class NamedCombinator(NestedCombinator):
         namespace = self.make_namespace(context, result)
         return result, namespace, error
 
-    def __str__(self) -> str:
-        if isinstance(self.combinator, SequenceCombinator):
-            return f'{self.name}:({self.combinator})'
-        return f'{self.name}:{self.combinator}'
-
 
 @attr.dataclass(frozen=True, repr=False)
 class OptionalCombinator(NestedCombinator):
@@ -244,9 +226,6 @@ class OptionalCombinator(NestedCombinator):
                 return self.combinator(parser, context)
             except ParserError as error:
                 return None, {}, error
-
-    def __str__(self) -> str:
-        return f'[ {self.combinator} ]'
 
 
 @attr.dataclass(frozen=True, repr=False)
@@ -283,9 +262,6 @@ class RepeatCombinator(NestedCombinator):
                 for name, value in last_namespace.items():
                     namespace[name] = [*namespace[name], *value] if name in namespace else value
         return tuple(items), namespace, error
-
-    def __str__(self) -> str:
-        return f'{{self.combinator}}'
 
 
 def flat_combinator(combinator: Union[Combinator, SymbolID]) -> Combinator:

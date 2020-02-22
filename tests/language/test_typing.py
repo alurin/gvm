@@ -1,13 +1,13 @@
 from typing import Optional, Sequence, List
 
-from gvm.typing import unpack_type_arguments, merge_sequence_type, make_optional_type, make_sequence_type, is_subclass
+from gvm.typing import unpack_type_argument, merge_sequence_type, make_optional_type, make_sequence_type, is_subclass
 
 
 def test_unpack_type_arguments():
-    assert unpack_type_arguments(Optional[int]) is int
-    assert unpack_type_arguments(Sequence[int]) is int
-    assert unpack_type_arguments(List[int]) is List[int]
-    assert unpack_type_arguments(int) is int
+    assert unpack_type_argument(Optional[int]) is int
+    assert unpack_type_argument(Sequence[int]) is int
+    assert unpack_type_argument(List[int]) is List[int]
+    assert unpack_type_argument(int) is int
 
 
 def test_merge_sequence_type():

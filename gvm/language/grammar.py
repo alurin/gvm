@@ -48,7 +48,7 @@ class SymbolID:
 @attr.dataclass(frozen=True)
 class TokenID(SymbolID):
     description: str = attr.attrib(hash=False, order=False, eq=False, repr=False)
-    is_implicit: bool = attr.attrib(hash=False, order=False, eq=False, repr=False, default=False)
+    is_implicit: bool = attr.attrib(hash=False, order=False, eq=False, repr=False)
 
 
 class ParseletKind(enum.IntEnum):
@@ -62,15 +62,20 @@ class ParseletID(SymbolID):
     result_type: Type = attr.attrib(hash=False, order=False, eq=False, repr=False)
 
 
-@attr.dataclass(order=True, frozen=True)
+@attr.dataclass(order=True, frozen=True, repr=False)
 class SyntaxPattern:
     token_id: TokenID = attr.attrib(order=False, eq=True)
     pattern: Pattern = attr.attrib(order=False, eq=True)
     priority: int = attr.attrib(order=True, eq=True)
     location: Location = attr.attrib(order=False, eq=False)
+    is_implicit: bool = attr.attrib(order=False, eq=False)
 
     def match(self, content: str, start: int) -> Optional[Match[str]]:
         return self.pattern.match(content, start)
+
+    def __str__(self) -> str:
+        from gvm.language.printer import dump_pattern
+        return dump_pattern.to_string(self)
 
 
 @attr.dataclass
@@ -151,16 +156,18 @@ class Grammar:
         self.__tokens[name] = self.__symbols[name] = token_id
         return token_id
 
-    def add_pattern(self, token_id: TokenID, pattern: str, *, priority: int = PRIORITY_MAX, location: Location = None) \
-            -> TokenID:
+    def add_pattern(self, token_id: TokenID, pattern: str, *, priority: int = PRIORITY_MAX, location: Location = None,
+                    is_implicit: bool = False) -> TokenID:
         location = location or py_location(2)
-        bisect.insort_right(self.__patterns, SyntaxPattern(token_id, re.compile(pattern), priority, location))
+        bisect.insort_right(
+            self.__patterns, SyntaxPattern(token_id, re.compile(pattern), priority, location, is_implicit))
         return token_id
 
     def add_implicit(self, pattern: str, *, location: Location = None) -> TokenID:
         location = location or py_location(2)
         token_id = self.add_token(pattern, is_implicit=True, location=location)
-        return self.add_pattern(token_id, re.escape(pattern), priority=-len(pattern), location=location)
+        return self.add_pattern(token_id, re.escape(pattern), priority=-len(pattern), location=location,
+                                is_implicit=True)
 
     def add_trivia(self, token_id: TokenID):
         self.__trivia.add(token_id)
@@ -201,9 +208,9 @@ class Grammar:
         self.__tables[parser_id] = (PackratTable if kind == ParseletKind.Packrat else PrattTable)(parser_id)
         return parser_id
 
-    def add_parser(self, parser_id: ParseletID, combinator: Union[Combinator, str, SymbolID],
+    def add_parser(self, parser_id: Union[str, ParseletID], combinator: Union[Combinator, str, SymbolID],
                    generator: ActionGenerator = None, *, priority: int = PRIORITY_MAX, location: Location = None) \
-            -> Parselet:
+            -> ParseletID:
         location = location or py_location(2)
         # convert input combinator to instance of Combinator
         if isinstance(combinator, str):
@@ -216,16 +223,21 @@ class Grammar:
         generator = generator or make_return_result()
         action = generator(combinator)
 
-        # check result of action with ret
-        if not is_subclass(action.result_type, parser_id.result_type):
-            raise GrammarError(
-                location,
-                f'Can not add parser to parselet because return types is different: '
-                f'{action.result_type} and {parser_id.result_type}'
-            )
+        # check parser type
+        if isinstance(parser_id, str):
+            parser_id = self.add_parselet(parser_id, location=location, result_type=action.result_type)
+        else:
+            # check result of action with ret
+            if not is_subclass(action.result_type, parser_id.result_type):
+                raise GrammarError(
+                    location,
+                    f'Can not add parser to parselet because return types is different: '
+                    f'{action.result_type} and {parser_id.result_type}'
+                )
 
         # add parser tot table
-        return self.tables[parser_id].add_parser(combinator, action, priority, location)
+        self.tables[parser_id].add_parser(combinator, action, priority, location)
+        return parser_id
 
     def extend(self, grammar: Grammar, *, location: Location = None):
         """
@@ -238,7 +250,7 @@ class Grammar:
         for token_id in grammar.tokens.values():
             try:
                 symbols[token_id] = self.add_token(
-                    token_id.name, token_id.description, location=token_id.location, is_implicit=True)
+                    token_id.name, token_id.description, location=token_id.location, is_implicit=token_id.is_implicit)
             except GrammarError as ex:
                 raise attr.evolve(ex, location=location)
 
@@ -262,7 +274,7 @@ class Grammar:
             if pattern not in self.__patterns:
                 token_id: TokenID = cast(TokenID, symbols[pattern.token_id])
                 bisect.insort_right(self.__patterns, SyntaxPattern(
-                    token_id, pattern.pattern, pattern.priority, pattern.location
+                    token_id, pattern.pattern, pattern.priority, pattern.location, pattern.is_implicit
                 ))
 
         # merge parser tables
@@ -469,7 +481,8 @@ class Parselet(abc.ABC):
         return self.priority > other.priority
 
     def __str__(self) -> str:
-        return f'{self.parser_id.name} := {self.combinator} -> {self.result_type}'
+        from gvm.language.printer import dump_parselet
+        return dump_parselet.to_string(self)
 
     def __repr__(self) -> str:
         class_name = type(self).__name__

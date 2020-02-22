@@ -35,6 +35,7 @@ def test_add_pattern():
     assert pattern.token_id == token_id
     assert pattern.pattern == re.compile(r'[a-zA-Z]*')
     assert pattern.priority == PRIORITY_MAX
+    assert not pattern.is_implicit
 
 
 def test_add_implicit_token():
@@ -51,6 +52,7 @@ def test_add_implicit_token():
     assert pattern.token_id == token_id
     assert pattern.pattern == re.compile(re.escape('+'))
     assert pattern.priority < 0
+    assert pattern.is_implicit
 
 
 def test_add_idempotent_token():
@@ -168,6 +170,12 @@ def test_add_pratt_parser():
     assert grammar.add_parser(expr_id, make_sequence(make_named('lhs', expr_id), make_named('op', star_id), expr_id))
 
 
+def test_add_fast_parser():
+    grammar = Grammar()
+    grammar.add_token('Number')
+    grammar.add_parser('expr', 'Number')
+
+
 def test_add_incorrect_pratt_parser():
     grammar = Grammar()
     stmt_id = grammar.add_parselet('stmt', kind=ParseletKind.Pratt, result_type=SyntaxToken)
@@ -214,6 +222,16 @@ def test_extend_grammar():
     assert len(result.parselets) == 1
     assert len(result.patterns) == 5
     assert {pattern.pattern.pattern for pattern in result.patterns} == {'a+', '_a+', 'b+', '_b+', 'c+'}
+
+
+def test_extend_implicit_grammar():
+    grammar1 = Grammar()
+    grammar1.add_implicit('(')
+    result = Grammar()
+    result.extend(grammar1)
+    assert result.patterns[0].token_id == result.tokens['(']
+    assert result.patterns[0].priority == - len('(')
+    assert result.patterns[0].is_implicit
 
 
 def test_extend_trivia_grammar():
