@@ -4,4 +4,3 @@
 # of the MIT license. See the LICENSE file for details.
 from gvm.language.grammar import Grammar, SymbolID, TokenID, ParseletID
 from gvm.language.scanner import Scanner, DefaultScanner, IndentationScanner
-

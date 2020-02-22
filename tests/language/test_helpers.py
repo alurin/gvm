@@ -95,3 +95,13 @@ def test_parse_named_combinator():
     assert isinstance(result, NamedCombinator)
     assert isinstance(result.combinator, TokenCombinator)
     assert result.combinator.token_id == token_id
+
+
+def test_parse_named_combinator():
+    # comb := NAME
+    grammar = Grammar()
+    token_id = grammar.add_token('Name')
+    result = make_combinator(grammar, 'name: Name')
+    assert isinstance(result, NamedCombinator)
+    assert isinstance(result.combinator, TokenCombinator)
+    assert result.combinator.token_id == token_id

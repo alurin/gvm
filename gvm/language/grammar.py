@@ -48,6 +48,7 @@ class SymbolID:
 @attr.dataclass(frozen=True)
 class TokenID(SymbolID):
     description: str = attr.attrib(hash=False, order=False, eq=False, repr=False)
+    is_implicit: bool = attr.attrib(hash=False, order=False, eq=False, repr=False, default=False)
 
 
 class ParseletKind(enum.IntEnum):
@@ -63,7 +64,7 @@ class ParseletID(SymbolID):
 
 @attr.dataclass(order=True, frozen=True)
 class SyntaxPattern:
-    id: TokenID = attr.attrib(order=False, eq=True)
+    token_id: TokenID = attr.attrib(order=False, eq=True)
     pattern: Pattern = attr.attrib(order=False, eq=True)
     priority: int = attr.attrib(order=True, eq=True)
     location: Location = attr.attrib(order=False, eq=False)
@@ -146,7 +147,7 @@ class Grammar:
             raise GrammarError(location, f'Already registered symbol id: {name}')
 
         description = description or (name if is_implicit else camel_case_to_lower(name))
-        token_id = TokenID(len(self.__symbols) + 1, name, location, description)
+        token_id = TokenID(len(self.__symbols) + 1, name, location, description, is_implicit)
         self.__tokens[name] = self.__symbols[name] = token_id
         return token_id
 
@@ -202,7 +203,7 @@ class Grammar:
 
     def add_parser(self, parser_id: ParseletID, combinator: Union[Combinator, str, SymbolID],
                    generator: ActionGenerator = None, *, priority: int = PRIORITY_MAX, location: Location = None) \
-            -> AbstractParselet:
+            -> Parselet:
         location = location or py_location(2)
         # convert input combinator to instance of Combinator
         if isinstance(combinator, str):
@@ -259,12 +260,18 @@ class Grammar:
         # merge token patterns
         for pattern in grammar.patterns:
             if pattern not in self.__patterns:
-                token_id: TokenID = cast(TokenID, symbols[pattern.id])
+                token_id: TokenID = cast(TokenID, symbols[pattern.token_id])
                 bisect.insort_right(self.__patterns, SyntaxPattern(
                     token_id, pattern.pattern, pattern.priority, pattern.location
                 ))
 
-        # TODO: merge tables
+        # merge parser tables
+        for table in grammar.tables.values():
+            parser_id = cast(ParseletID, symbols[table.parser_id])
+            new_table: ParseletTable = self.tables[parser_id]
+            for parselet in table.parselets:
+                combinator = parselet.combinator.clone(symbols)
+                new_table.add_parser(combinator, parselet.action, parselet.priority, parselet.location)
 
     @classmethod
     def merge(cls, *grammars: Grammar, location: Location = None) -> Grammar:
@@ -292,8 +299,13 @@ class ParseletTable(abc.ABC):
     def parser_id(self) -> ParseletID:
         return self.__parser_id
 
+    @property
     @abc.abstractmethod
-    def add_parser(self, combinator: Combinator, action: Action, priority: int, location: Location) -> AbstractParselet:
+    def parselets(self) -> Sequence[Parselet]:
+        raise NotImplementedError
+
+    @abc.abstractmethod
+    def add_parser(self, combinator: Combinator, action: Action, priority: int, location: Location) -> Parselet:
         raise NotImplementedError
 
     @abc.abstractmethod
@@ -307,9 +319,14 @@ class PrattTable(ParseletTable):
 
         self.__prefixes = collections.defaultdict(list)
         self.__postfixes = collections.defaultdict(list)
+        self.__parselets = []
 
     @property
-    def prefixes(self) -> Mapping[TokenID, Sequence[Parselet]]:
+    def parselets(self) -> Sequence[Parselet]:
+        return self.__parselets
+
+    @property
+    def prefixes(self) -> Mapping[TokenID, Sequence[PrefixParselet]]:
         return self.__prefixes
 
     @property
@@ -320,7 +337,7 @@ class PrattTable(ParseletTable):
     def prefix_tokens(self) -> Set[TokenID]:
         return set(self.prefixes.keys())
 
-    def add_parser(self, combinator: Combinator, action: Action, priority: int, location: Location) -> AbstractParselet:
+    def add_parser(self, combinator: Combinator, action: Action, priority: int, location: Location) -> Parselet:
         if isinstance(combinator, SequenceCombinator):
             front_combinator = combinator[0]
             if isinstance(front_combinator, NamedCombinator):
@@ -351,16 +368,19 @@ class PrattTable(ParseletTable):
     def __add_prefix(self, token_id: TokenID, combinator: Combinator, action: Action, priority: int,
                      location: Location):
         """ Add prefix parser """
-        parselet = Parselet(combinator, action, priority, location)
+        parselet = PrefixParselet(self.parser_id, combinator, action, priority, location)
         bisect.insort_right(self.__prefixes[token_id], parselet)
+        bisect.insort_right(self.__parselets, parselet)
         self.__dict__.pop('prefix_tokens', None)  # cleanup prefix tokens cache
         return parselet
 
     def __add_postfix(self, token_id: TokenID, combinator: SequenceCombinator, action: Action, priority: int,
                       location: Location):
         """ Add postfix parser """
-        parselet = PostfixParselet(PostfixCombinator(combinator.combinators), action, priority, location)
+        parselet = PostfixParselet(self.parser_id, PostfixCombinator(combinator.combinators), action, priority,
+                                   location)
         bisect.insort_right(self.__postfixes[token_id], parselet)
+        bisect.insort_right(self.__parselets, parselet)
         return parselet
 
     def __call__(self, parser: Parser, priority: int) -> ParseletResult:
@@ -393,8 +413,12 @@ class PackratTable(ParseletTable):
 
         self.__parselets = []
 
-    def add_parser(self, combinator: Combinator, action: Action, priority: int, location: Location) -> AbstractParselet:
-        parselet = Parselet(combinator, action, priority, location)
+    @property
+    def parselets(self) -> Sequence[Parselet]:
+        return self.__parselets
+
+    def add_parser(self, combinator: Combinator, action: Action, priority: int, location: Location) -> Parselet:
+        parselet = PrefixParselet(self.parser_id, combinator, action, priority, location)
         bisect.insort_right(self.__parselets, parselet)
         return parselet
 
@@ -402,12 +426,13 @@ class PackratTable(ParseletTable):
         return parser.choice(self.__parselets)
 
 
-@attr.dataclass(frozen=True)
-class AbstractParselet(abc.ABC):
-    combinator: Combinator = attr.attrib(order=False, eq=False, repr=False)
-    action: Action = attr.attrib(order=False, eq=False, repr=False)
-    priority: int = attr.attrib(order=True)
-    location: Location = attr.attrib(order=False)
+@attr.dataclass(frozen=True, repr=False, order=False, eq=False)
+class Parselet(abc.ABC):
+    parser_id: ParseletID
+    combinator: Combinator
+    action: Action
+    priority: int
+    location: Location
 
     @property
     def variables(self) -> Mapping[str, Type]:
@@ -427,9 +452,32 @@ class AbstractParselet(abc.ABC):
                 result[name] = tuple(namespace[name]) if is_sequence_type(typ) else namespace[name]
         return result
 
+    @abc.abstractmethod
+    def __call__(self, parser: Parser) -> ParseletResult:
+        raise NotImplementedError
 
-@attr.dataclass(frozen=True)
-class Parselet(AbstractParselet):
+    def __lt__(self, other: Parselet):
+        if not isinstance(other, Parselet):
+            raise TypeError(
+                f"'<' not supported between instances of '{type(self).__name__}' and '{type(other).__name__}'")
+        return self.priority < other.priority
+
+    def __gt__(self, other: Parselet):
+        if not isinstance(other, Parselet):
+            raise TypeError(
+                f"'>' not supported between instances of '{type(self).__name__}' and '{type(other).__name__}'")
+        return self.priority > other.priority
+
+    def __str__(self) -> str:
+        return f'{self.parser_id.name} := {self.combinator} -> {self.result_type}'
+
+    def __repr__(self) -> str:
+        class_name = type(self).__name__
+        return f'<{class_name}: {self}>'
+
+
+@attr.dataclass(frozen=True, order=False, eq=False)
+class PrefixParselet(Parselet):
     """ Parselet e.g rule in PEG or prefix rule in Pratt """
 
     def __call__(self, parser: Parser) -> ParseletResult:
@@ -438,11 +486,11 @@ class Parselet(AbstractParselet):
         return result, error
 
 
-@attr.dataclass(frozen=True)
-class PostfixParselet(AbstractParselet):
+@attr.dataclass(frozen=True, order=False, eq=False)
+class PostfixParselet(Parselet):
     """ Postfix parselet, e.g. postfix rule in Pratt """
 
-    def __call__(self, parser: Parser, left: SyntaxNode) -> ParseletResult:
+    def __call__(self, parser: Parser, left: SyntaxNode = None) -> ParseletResult:
         result, namespace, error = cast(PostfixCombinator, self.combinator).fixme(parser, self, left)
         result = self.action(result, self.merge_namespace(namespace))
         return result, error

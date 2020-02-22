@@ -44,7 +44,7 @@ class Scanner:
         self.location = self.location.step()
 
         # match patterns
-        results = ((pattern.id, pattern.match(self.buffer, self.position)) for pattern in self.grammar.patterns)
+        results = ((pattern.token_id, pattern.match(self.buffer, self.position)) for pattern in self.grammar.patterns)
         results = tuple((token_id, match) for token_id, match in results if match)
         if results:
             max_position = max(match.end() for _, match in results)

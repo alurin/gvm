@@ -14,7 +14,7 @@ from gvm.typing import merge_sequence_type, make_optional_type, make_sequence_ty
 from gvm.utils import cached_property
 
 if TYPE_CHECKING:
-    from gvm.language.grammar import SymbolID, TokenID, ParseletID, AbstractParselet
+    from gvm.language.grammar import SymbolID, TokenID, ParseletID, Parselet
 from gvm.language.parser import Parser, ParserError
 from gvm.language.syntax import SyntaxToken
 
@@ -25,7 +25,7 @@ CombinatorResult = Tuple[object, Mapping[str, object], Optional[ParserError]]
 #   args: Sequence[?] = []
 
 
-@attr.dataclass
+@attr.dataclass(frozen=True, repr=False)
 class Combinator(abc.ABC):
     @cached_property
     def variables(self) -> Mapping[str, Type]:
@@ -37,16 +37,31 @@ class Combinator(abc.ABC):
         raise NotImplementedError
 
     @abc.abstractmethod
-    def __call__(self, parser: Parser, context: AbstractParselet) -> CombinatorResult:
+    def clone(self, symbols: Mapping[SymbolID, SymbolID]) -> Combinator:
         raise NotImplementedError
 
+    @abc.abstractmethod
+    def __call__(self, parser: Parser, context: Parselet) -> CombinatorResult:
+        raise NotImplementedError
 
-@attr.dataclass
+    @abc.abstractmethod
+    def __str__(self) -> str:
+        raise NotImplementedError
+
+    def __repr__(self) -> str:
+        class_name = type(self).__name__
+        return f'<{class_name}: {self}>'
+
+
+@attr.dataclass(frozen=True, repr=False)
 class NestedCombinator(Combinator, abc.ABC):
     combinator: Combinator
 
+    def clone(self, symbols: Mapping[SymbolID, SymbolID]) -> Combinator:
+        return type(self)(self.combinator.clone(symbols))
 
-@attr.dataclass
+
+@attr.dataclass(frozen=True, repr=False)
 class TokenCombinator(Combinator):
     """
     This combinator is match token by it's identifier.
@@ -59,11 +74,19 @@ class TokenCombinator(Combinator):
     def result_type(self) -> Type:
         return SyntaxToken
 
-    def __call__(self, parser: Parser, context: AbstractParselet) -> CombinatorResult:
+    def clone(self, symbols: Mapping[SymbolID, SymbolID]) -> Combinator:
+        return type(self)(symbols[self.token_id])
+
+    def __call__(self, parser: Parser, context: Parselet) -> CombinatorResult:
         return parser.consume(self.token_id), {}, None
 
+    def __str__(self) -> str:
+        if self.token_id.is_implicit:
+            return repr(self.token_id.name)
+        return self.token_id.name
 
-@attr.dataclass
+
+@attr.dataclass(frozen=True, repr=False)
 class ParseletCombinator(Combinator):
     """
     This combinator is match result of call another parselet.
@@ -75,12 +98,20 @@ class ParseletCombinator(Combinator):
     def result_type(self) -> Type:
         return self.parser_id.result_type
 
-    def __call__(self, parser: Parser, context: AbstractParselet) -> CombinatorResult:
+    def clone(self, symbols: Mapping[SymbolID, SymbolID]) -> Combinator:
+        return type(self)(symbols[self.parser_id], self.priority)
+
+    def __call__(self, parser: Parser, context: Parselet) -> CombinatorResult:
         result, error = parser.parselet(self.parser_id, self.priority)
         return result, {}, error
 
+    def __str__(self) -> str:
+        if self.priority:
+            return f'{self.parser_id.name} <{self.priority}>'
+        return self.parser_id.name
 
-@attr.dataclass
+
+@attr.dataclass(frozen=True, repr=False)
 class CollectionCombinator(Combinator, Sequence[Combinator], abc.ABC):
     """
     Abstract base for all combinators that contains sequence of nested combinators.
@@ -99,8 +130,11 @@ class CollectionCombinator(Combinator, Sequence[Combinator], abc.ABC):
     def __len__(self) -> int:
         return len(self.combinators)
 
+    def clone(self, symbols: Mapping[SymbolID, SymbolID]) -> Combinator:
+        return type(self)(tuple(combinator.clone(symbols) for combinator in self.combinators))
 
-@attr.dataclass
+
+@attr.dataclass(frozen=True, repr=False)
 class SequenceCombinator(CollectionCombinator):
     """
     This combinator is match sequence of nested combinators.
@@ -127,11 +161,14 @@ class SequenceCombinator(CollectionCombinator):
 
         return variables
 
-    def __call__(self, parser: Parser, context: AbstractParselet) -> CombinatorResult:
+    def __call__(self, parser: Parser, context: Parselet) -> CombinatorResult:
         return sequence(parser, context, self.combinators)
 
+    def __str__(self) -> str:
+        return " ".join(map(str, self.combinators))
 
-@attr.dataclass
+
+@attr.dataclass(frozen=True, repr=False)
 class PostfixCombinator(SequenceCombinator):
     """
     This combinator is special version of sequence combinator, that ignored first nested combinator.
@@ -139,10 +176,10 @@ class PostfixCombinator(SequenceCombinator):
     Used only for postfix Pratt, e.g. led action
     """
 
-    def __call__(self, parser: Parser, context: AbstractParselet) -> CombinatorResult:
+    def __call__(self, parser: Parser, context: Parselet) -> CombinatorResult:
         return sequence(parser, context, itertools.islice(self.combinators, 1, None))
 
-    def fixme(self, parser: Parser, context: AbstractParselet, left: object) -> CombinatorResult:
+    def fixme(self, parser: Parser, context: Parselet, left: object) -> CombinatorResult:
         """ this method is used for fix recursive call in first nested combinator """
         result, namespace, error = self(parser, context)
         first_combinator = self.combinators[0]
@@ -152,7 +189,7 @@ class PostfixCombinator(SequenceCombinator):
         return result, namespace, error
 
 
-@attr.dataclass
+@attr.dataclass(frozen=True, repr=False)
 class NamedCombinator(NestedCombinator):
     name: str
 
@@ -164,20 +201,28 @@ class NamedCombinator(NestedCombinator):
     def variables(self) -> Mapping[str, Type]:
         return {self.name: self.combinator.result_type}
 
-    def __call__(self, parser: Parser, context: AbstractParselet) -> CombinatorResult:
-        result, _, error = self.combinator(parser, context)
-        namespace = self.make_namespace(context, result)
-        return result, namespace, error
+    def clone(self, symbols: Mapping[SymbolID, SymbolID]) -> Combinator:
+        return type(self)(self.combinator.clone(symbols), self.name)
 
-    def make_namespace(self, context: AbstractParselet, result: object) -> Mapping[str, object]:
+    def make_namespace(self, context: Parselet, result: object) -> Mapping[str, object]:
         if is_sequence_type(self.combinator.result_type):
             return {self.name: result}
         elif is_sequence_type(context.variables[self.name]):
             return {self.name: (result,)}
         return {self.name: result}
 
+    def __call__(self, parser: Parser, context: Parselet) -> CombinatorResult:
+        result, _, error = self.combinator(parser, context)
+        namespace = self.make_namespace(context, result)
+        return result, namespace, error
 
-@attr.dataclass
+    def __str__(self) -> str:
+        if isinstance(self.combinator, SequenceCombinator):
+            return f'{self.name}:({self.combinator})'
+        return f'{self.name}:{self.combinator}'
+
+
+@attr.dataclass(frozen=True, repr=False)
 class OptionalCombinator(NestedCombinator):
     """
     This combinator is
@@ -193,15 +238,18 @@ class OptionalCombinator(NestedCombinator):
         nested_variables = self.combinator.variables
         return {name: make_optional_type(typ) for name, typ in nested_variables.items()}
 
-    def __call__(self, parser: Parser, context: AbstractParselet) -> CombinatorResult:
+    def __call__(self, parser: Parser, context: Parselet) -> CombinatorResult:
         with parser.backtrack():
             try:
                 return self.combinator(parser, context)
             except ParserError as error:
                 return None, {}, error
 
+    def __str__(self) -> str:
+        return f'[ {self.combinator} ]'
 
-@attr.dataclass
+
+@attr.dataclass(frozen=True, repr=False)
 class RepeatCombinator(NestedCombinator):
     """
     This combinator match zero or more occurrences of nested combinator.
@@ -218,7 +266,7 @@ class RepeatCombinator(NestedCombinator):
         nested_variables = self.combinator.variables
         return {name: make_sequence_type(typ) for name, typ in nested_variables.items()}
 
-    def __call__(self, parser: Parser, context: AbstractParselet) -> CombinatorResult:
+    def __call__(self, parser: Parser, context: Parselet) -> CombinatorResult:
         items = []
         error = None
         namespace = {}
@@ -235,6 +283,9 @@ class RepeatCombinator(NestedCombinator):
                 for name, value in last_namespace.items():
                     namespace[name] = [*namespace[name], *value] if name in namespace else value
         return tuple(items), namespace, error
+
+    def __str__(self) -> str:
+        return f'{{self.combinator}}'
 
 
 def flat_combinator(combinator: Union[Combinator, SymbolID]) -> Combinator:
@@ -300,7 +351,7 @@ def make_repeat(*combinators: Union[Combinator, SymbolID]) -> Combinator:
     return RepeatCombinator(make_sequence(*combinators))
 
 
-def sequence(parser: Parser, context: AbstractParselet, combinators: Iterable[Combinator]) -> CombinatorResult:
+def sequence(parser: Parser, context: Parselet, combinators: Iterable[Combinator]) -> CombinatorResult:
     result = None
     error = None
     namespace = {}

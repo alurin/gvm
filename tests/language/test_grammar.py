@@ -8,7 +8,7 @@ from typing import cast
 import pytest
 
 from gvm.language.combinators import make_sequence, make_optional, make_named
-from gvm.language.grammar import Grammar, PRIORITY_MAX, ParseletKind, GrammarError, PrattTable
+from gvm.language.grammar import Grammar, PRIORITY_MAX, ParseletKind, GrammarError, PrattTable, PackratTable
 from gvm.language.syntax import SyntaxToken
 
 
@@ -19,6 +19,9 @@ def test_add_token():
     assert 'Name' in grammar.tokens
     assert len(grammar.patterns) == 0
     assert token_id == token_id
+    assert token_id.name == 'Name'
+    assert token_id.description == 'name'
+    assert not token_id.is_implicit
 
 
 def test_add_pattern():
@@ -29,7 +32,7 @@ def test_add_pattern():
 
     assert len(grammar.patterns) == 1
     pattern = grammar.patterns[0]
-    assert pattern.id == token_id
+    assert pattern.token_id == token_id
     assert pattern.pattern == re.compile(r'[a-zA-Z]*')
     assert pattern.priority == PRIORITY_MAX
 
@@ -38,11 +41,14 @@ def test_add_implicit_token():
     grammar = Grammar()
     token_id = grammar.add_implicit('+')
 
+    assert token_id.name == '+'
+    assert token_id.description == '+'
+    assert token_id.is_implicit
     assert '+' in grammar.tokens
 
     assert len(grammar.patterns) == 1
     pattern = grammar.patterns[0]
-    assert pattern.id == token_id
+    assert pattern.token_id == token_id
     assert pattern.pattern == re.compile(re.escape('+'))
     assert pattern.priority < 0
 
@@ -234,6 +240,27 @@ def test_extend_brackets_grammar():
         (result.tokens['['], result.tokens[']']),
         (result.tokens['('], result.tokens[')'])
     }
+
+
+def test_extend_packrat_grammar():
+    grammar1 = Grammar()
+    grammar1.add_token('Number')
+    grammar1.add_token('String')
+    expr_id = grammar1.add_parselet('expr', result_type=object)
+    grammar1.add_parser(expr_id, 'Number')
+    grammar1.add_parser(expr_id, 'String')
+
+    grammar2 = Grammar()
+    grammar2.add_token('Number')
+    grammar2.add_token('String')
+    expr_id = grammar2.add_parselet('expr', result_type=object)
+    grammar2.add_parser(expr_id, 'Number')
+    grammar2.add_parser(expr_id, 'String')
+
+    result = Grammar.merge(grammar1, grammar2)
+    expr_id = result.parselets['expr']
+    assert expr_id in result.tables
+    assert len(cast(PackratTable, result.tables[expr_id]).parselets) == 4
 
 
 def test_extend_fail_grammar():
