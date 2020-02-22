@@ -14,6 +14,7 @@ def test_merge_sequence_type():
     assert merge_sequence_type(int, int) == Sequence[int]
     assert merge_sequence_type(Sequence[int], int) == Sequence[int]
     assert merge_sequence_type(int, Sequence[int]) == Sequence[int]
+    assert merge_sequence_type(Sequence[int], Sequence[int]) == Sequence[int]
     assert merge_sequence_type(Optional[int], Sequence[int]) == Sequence[int]
     assert merge_sequence_type(Sequence[int], Optional[int]) == Sequence[int]
     assert merge_sequence_type(Optional[int], Optional[int]) == Sequence[int]

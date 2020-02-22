@@ -40,3 +40,9 @@ def make_optional_type(typ: Type) -> Optional:
     if is_sequence_type(typ) or is_optional_type(typ):
         return typ
     return Optional[typ]
+
+
+def make_default_mutable_value(typ: Type) -> object:
+    if is_sequence_type(typ):
+        return []
+    return None

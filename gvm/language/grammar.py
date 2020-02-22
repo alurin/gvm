@@ -11,16 +11,19 @@ import enum
 import itertools
 import re
 import sys
-from typing import Mapping, Sequence, Tuple, Optional, Union, Pattern, Match, cast, MutableMapping, Set, FrozenSet
+from typing import Mapping, Sequence, Tuple, Optional, Union, Pattern, Match, cast, MutableMapping, Set, FrozenSet, \
+    Type
 
 import attr
 
 from gvm.exceptions import DiagnosticError
+from gvm.language.actions import ActionGenerator, make_return_result, Action
 from gvm.language.combinators import Combinator, SequenceCombinator, TokenCombinator, ParseletCombinator, \
     flat_combinator, PostfixCombinator, NamedCombinator
 from gvm.language.parser import Parser, ParserError
 from gvm.language.syntax import SyntaxNode
 from gvm.locations import Location, py_location
+from gvm.typing import make_default_mutable_value, is_sequence_type
 from gvm.utils import camel_case_to_lower, cached_property
 
 RE_TOKEN = re.compile('[A-Z][a-zA-Z0-9]*')
@@ -55,6 +58,7 @@ class ParseletKind(enum.IntEnum):
 @attr.dataclass(frozen=True)
 class ParseletID(SymbolID):
     kind: ParseletKind = attr.attrib(hash=False, order=False, eq=False, repr=False)
+    result_type: Type = attr.attrib(hash=False, order=False, eq=False, repr=False)
 
 
 @attr.dataclass(order=True, frozen=True)
@@ -175,8 +179,9 @@ class Grammar:
         self.__close_brackets.add(close_id)
         self.__bracket_pairs[open_id] = close_id
 
-    def add_parselet(self, name: str, *, kind: ParseletKind = ParseletKind.Packrat, location: Location = None) \
-            -> ParseletID:
+    def add_parselet(self, name: str, *, result_type: Type = None, kind: ParseletKind = ParseletKind.Packrat,
+                     location: Location = None) -> ParseletID:
+        result_type = result_type or SyntaxNode
         location = location or py_location(2)
         if not RE_PARSELET.match(name):
             raise GrammarError(location, f'Symbol id for parselet must be: {RE_PARSELET.pattern}')
@@ -184,26 +189,42 @@ class Grammar:
             parser_id = self.__parselets[name]
             if parser_id.kind != kind:
                 raise GrammarError(location, f'Can not define parser {parser_id} with different kind')
+            if parser_id.result_type != result_type:
+                raise GrammarError(location, f'Can not define parser {parser_id} with different return type')
             return parser_id
         if name in self.__symbols:
             raise GrammarError(location, f'Already registered symbol id: {name}')
 
-        parser_id = ParseletID(len(self.__symbols), name, location, kind)
+        parser_id = ParseletID(len(self.__symbols), name, location, kind, result_type)
         self.__parselets[name] = self.__symbols[name] = parser_id
         self.__tables[parser_id] = (PackratTable if kind == ParseletKind.Packrat else PrattTable)(parser_id)
         return parser_id
 
     def add_parser(self, parser_id: ParseletID, combinator: Union[Combinator, str, SymbolID],
-                   *, priority: int = PRIORITY_MAX, location: Location = None) \
+                   generator: ActionGenerator = None, *, priority: int = PRIORITY_MAX, location: Location = None) \
             -> AbstractParselet:
         location = location or py_location(2)
+        # convert input combinator to instance of Combinator
         if isinstance(combinator, str):
-            from gvm.language.helpers import parse_combinator
-            combinator = parse_combinator(self, combinator, location)
+            from gvm.language.helpers import make_combinator
+            combinator = make_combinator(self, combinator, location)
         else:
             combinator = flat_combinator(combinator)
 
-        return self.tables[parser_id].add_parser(combinator, priority, location)
+        # convert action to combinator action
+        generator = generator or make_return_result()
+        action = generator(combinator)
+
+        # check result of action with ret
+        if action.result_type != parser_id.result_type and not issubclass(action.result_type, parser_id.result_type):
+            raise GrammarError(
+                location,
+                f'Can not add parser to parselet because return types is different: '
+                f'{action.result_type} and {parser_id.result_type}'
+            )
+
+        # add parser tot table
+        return self.tables[parser_id].add_parser(combinator, action, priority, location)
 
     def extend(self, grammar: Grammar, *, location: Location = None):
         """
@@ -272,7 +293,7 @@ class ParseletTable(abc.ABC):
         return self.__parser_id
 
     @abc.abstractmethod
-    def add_parser(self, combinator: Combinator, priority: int, location: Location) -> AbstractParselet:
+    def add_parser(self, combinator: Combinator, action: Action, priority: int, location: Location) -> AbstractParselet:
         raise NotImplementedError
 
     @abc.abstractmethod
@@ -299,13 +320,13 @@ class PrattTable(ParseletTable):
     def prefix_tokens(self) -> Set[TokenID]:
         return set(self.prefixes.keys())
 
-    def add_parser(self, combinator: Combinator, priority: int, location: Location) -> AbstractParselet:
+    def add_parser(self, combinator: Combinator, action: Action, priority: int, location: Location) -> AbstractParselet:
         if isinstance(combinator, SequenceCombinator):
             front_combinator = combinator[0]
             if isinstance(front_combinator, NamedCombinator):
                 front_combinator = front_combinator.combinator
             if isinstance(front_combinator, TokenCombinator):
-                return self.__add_prefix(front_combinator.token_id, combinator, priority, location)
+                return self.__add_prefix(front_combinator.token_id, combinator, action, priority, location)
 
             if isinstance(front_combinator, ParseletCombinator):
                 if front_combinator.parser_id == self.parser_id:
@@ -314,7 +335,8 @@ class PrattTable(ParseletTable):
                         if isinstance(second_combinator, NamedCombinator):
                             second_combinator = second_combinator.combinator
                         if isinstance(second_combinator, TokenCombinator):
-                            return self.__add_postfix(second_combinator.token_id, combinator, priority, location)
+                            return self.__add_postfix(
+                                second_combinator.token_id, combinator, action, priority, location)
                     else:
                         raise GrammarError(location, "Second combinator for Pratt postfix parselet must be token")
         else:
@@ -322,20 +344,22 @@ class PrattTable(ParseletTable):
             if isinstance(front_combinator, NamedCombinator):
                 front_combinator = front_combinator.combinator
             if isinstance(front_combinator, TokenCombinator):
-                return self.__add_prefix(front_combinator.token_id, combinator, priority, location)
+                return self.__add_prefix(front_combinator.token_id, combinator, action, priority, location)
 
         raise GrammarError(location, "First combinator for Pratt parselet must be self parser or token")
 
-    def __add_prefix(self, token_id: TokenID, combinator: Combinator, priority: int, location: Location):
+    def __add_prefix(self, token_id: TokenID, combinator: Combinator, action: Action, priority: int,
+                     location: Location):
         """ Add prefix parser """
-        parselet = Parselet(combinator, priority, location)
+        parselet = Parselet(combinator, action, priority, location)
         bisect.insort_right(self.__prefixes[token_id], parselet)
         self.__dict__.pop('prefix_tokens', None)  # cleanup prefix tokens cache
         return parselet
 
-    def __add_postfix(self, token_id: TokenID, combinator: SequenceCombinator, priority: int, location: Location):
+    def __add_postfix(self, token_id: TokenID, combinator: SequenceCombinator, action: Action, priority: int,
+                      location: Location):
         """ Add postfix parser """
-        parselet = PostfixParselet(PostfixCombinator(combinator.combinators), priority, location)
+        parselet = PostfixParselet(PostfixCombinator(combinator.combinators), action, priority, location)
         bisect.insort_right(self.__postfixes[token_id], parselet)
         return parselet
 
@@ -369,8 +393,8 @@ class PackratTable(ParseletTable):
 
         self.__parselets = []
 
-    def add_parser(self, combinator: Combinator, priority: int, location: Location) -> AbstractParselet:
-        parselet = Parselet(combinator, priority, location)
+    def add_parser(self, combinator: Combinator, action: Action, priority: int, location: Location) -> AbstractParselet:
+        parselet = Parselet(combinator, action, priority, location)
         bisect.insort_right(self.__parselets, parselet)
         return parselet
 
@@ -380,9 +404,28 @@ class PackratTable(ParseletTable):
 
 @attr.dataclass(frozen=True)
 class AbstractParselet(abc.ABC):
-    combinator: Combinator = attr.attrib(order=False)
+    combinator: Combinator = attr.attrib(order=False, eq=False, repr=False)
+    action: Action = attr.attrib(order=False, eq=False, repr=False)
     priority: int = attr.attrib(order=True)
     location: Location = attr.attrib(order=False)
+
+    @property
+    def variables(self) -> Mapping[str, Type]:
+        return self.combinator.variables
+
+    @property
+    def result_type(self) -> Type:
+        return self.action.result_type
+
+    def merge_namespace(self, namespace: Mapping[str, object]) -> Mapping[str, object]:
+        result = {}
+        for name, typ in self.variables.items():
+            if name not in namespace:
+                result[name] = make_default_mutable_value(typ)
+            else:
+                # noinspection PyTypeChecker
+                result[name] = tuple(namespace[name]) if is_sequence_type(typ) else namespace[name]
+        return result
 
 
 @attr.dataclass(frozen=True)
@@ -390,7 +433,9 @@ class Parselet(AbstractParselet):
     """ Parselet e.g rule in PEG or prefix rule in Pratt """
 
     def __call__(self, parser: Parser) -> ParseletResult:
-        return self.combinator(parser)
+        result, namespace, error = self.combinator(parser, self)
+        result = self.action(result, self.merge_namespace(namespace))
+        return result, error
 
 
 @attr.dataclass(frozen=True)
@@ -398,4 +443,6 @@ class PostfixParselet(AbstractParselet):
     """ Postfix parselet, e.g. postfix rule in Pratt """
 
     def __call__(self, parser: Parser, left: SyntaxNode) -> ParseletResult:
-        return self.combinator(parser)
+        result, namespace, error = self.combinator(parser, self)
+        result = self.action(result, self.merge_namespace(namespace))
+        return result, error

@@ -10,14 +10,15 @@ from typing import Sequence, overload, Iterator, Optional, Union, Type, Tuple, T
 
 import attr
 
-from gvm.typing import merge_sequence_type, make_optional_type, make_sequence_type
+from gvm.typing import merge_sequence_type, make_optional_type, make_sequence_type, is_sequence_type
+from gvm.utils import cached_property
 
 if TYPE_CHECKING:
-    from gvm.language.grammar import SymbolID, TokenID, ParseletID
+    from gvm.language.grammar import SymbolID, TokenID, ParseletID, AbstractParselet
 from gvm.language.parser import Parser, ParserError
-from gvm.language.syntax import SyntaxNode, SyntaxToken
+from gvm.language.syntax import SyntaxToken
 
-CombinatorResult = Tuple[Union[SyntaxNode, SyntaxToken, tuple, None], Optional[ParserError]]
+CombinatorResult = Tuple[object, Mapping[str, object], Optional[ParserError]]
 
 
 # args := [ args:expr { ',' args:expr } [','] ]
@@ -26,7 +27,8 @@ CombinatorResult = Tuple[Union[SyntaxNode, SyntaxToken, tuple, None], Optional[P
 
 @attr.dataclass
 class Combinator(abc.ABC):
-    def compute_variables(self) -> Mapping[str, Type]:
+    @cached_property
+    def variables(self) -> Mapping[str, Type]:
         return {}
 
     @property
@@ -35,7 +37,7 @@ class Combinator(abc.ABC):
         raise NotImplementedError
 
     @abc.abstractmethod
-    def __call__(self, parser: Parser) -> CombinatorResult:
+    def __call__(self, parser: Parser, context: AbstractParselet) -> CombinatorResult:
         raise NotImplementedError
 
 
@@ -57,8 +59,8 @@ class TokenCombinator(Combinator):
     def result_type(self) -> Type:
         return SyntaxToken
 
-    def __call__(self, parser: Parser) -> CombinatorResult:
-        return parser.consume(self.token_id), None
+    def __call__(self, parser: Parser, context: AbstractParselet) -> CombinatorResult:
+        return parser.consume(self.token_id), {}, None
 
 
 @attr.dataclass
@@ -71,10 +73,11 @@ class ParseletCombinator(Combinator):
 
     @property
     def result_type(self) -> Type:
-        return SyntaxNode
+        return self.parser_id.result_type
 
-    def __call__(self, parser: Parser) -> CombinatorResult:
-        return parser.parselet(self.parser_id, self.priority)
+    def __call__(self, parser: Parser, context: AbstractParselet) -> CombinatorResult:
+        result, error = parser.parselet(self.parser_id, self.priority)
+        return result, {}, error
 
 
 @attr.dataclass
@@ -111,10 +114,11 @@ class SequenceCombinator(CollectionCombinator):
     def result_type(self) -> Type:
         return self.combinators[-1].result_type
 
-    def compute_variables(self) -> Mapping[str, Type]:
+    @cached_property
+    def variables(self) -> Mapping[str, Type]:
         variables = {}
         for combinator in self.combinators:
-            nested_variables = combinator.compute_variables()
+            nested_variables = combinator.variables
             for name, typ in nested_variables.items():
                 if name not in variables:
                     variables[name] = typ
@@ -123,8 +127,8 @@ class SequenceCombinator(CollectionCombinator):
 
         return variables
 
-    def __call__(self, parser: Parser) -> CombinatorResult:
-        return sequence(parser, self.combinators)
+    def __call__(self, parser: Parser, context: AbstractParselet) -> CombinatorResult:
+        return sequence(parser, context, self.combinators)
 
 
 @attr.dataclass
@@ -135,8 +139,8 @@ class PostfixCombinator(SequenceCombinator):
     Used only for postfix Pratt, e.g. led action
     """
 
-    def __call__(self, parser: Parser) -> CombinatorResult:
-        return sequence(parser, itertools.islice(self.combinators, 1, None))
+    def __call__(self, parser: Parser, context: AbstractParselet) -> CombinatorResult:
+        return sequence(parser, context, itertools.islice(self.combinators, 1, None))
 
 
 @attr.dataclass
@@ -147,12 +151,19 @@ class NamedCombinator(NestedCombinator):
     def result_type(self) -> Type:
         return self.combinator.result_type
 
-    def compute_variables(self) -> Mapping[str, Type]:
+    @cached_property
+    def variables(self) -> Mapping[str, Type]:
         return {self.name: self.combinator.result_type}
 
-    def __call__(self, parser: Parser) -> CombinatorResult:
-        result = self.combinator(parser)
-        return result
+    def __call__(self, parser: Parser, context: AbstractParselet) -> CombinatorResult:
+        result, _, error = self.combinator(parser, context)
+        if is_sequence_type(self.combinator.result_type):
+            namespace = {self.name: result}
+        elif is_sequence_type(context.variables[self.name]):
+            namespace = {self.name: (result,)}
+        else:
+            namespace = {self.name: result}
+        return result, namespace, error
 
 
 @attr.dataclass
@@ -166,16 +177,17 @@ class OptionalCombinator(NestedCombinator):
     def result_type(self) -> Type:
         return Optional[self.combinator.result_type]
 
-    def compute_variables(self) -> Mapping[str, Type]:
-        nested_variables = self.combinator.compute_variables()
+    @cached_property
+    def variables(self) -> Mapping[str, Type]:
+        nested_variables = self.combinator.variables
         return {name: make_optional_type(typ) for name, typ in nested_variables.items()}
 
-    def __call__(self, parser: Parser) -> CombinatorResult:
+    def __call__(self, parser: Parser, context: AbstractParselet) -> CombinatorResult:
         with parser.backtrack():
             try:
-                return self.combinator(parser)
+                return self.combinator(parser, context)
             except ParserError as error:
-                return None, error
+                return None, {}, error
 
 
 @attr.dataclass
@@ -190,24 +202,28 @@ class RepeatCombinator(NestedCombinator):
     def result_type(self) -> Type:
         return Sequence[self.combinator.result_type]
 
-    def compute_variables(self) -> Mapping[str, Type]:
-        nested_variables = self.combinator.compute_variables()
+    @cached_property
+    def variables(self) -> Mapping[str, Type]:
+        nested_variables = self.combinator.variables
         return {name: make_sequence_type(typ) for name, typ in nested_variables.items()}
 
-    def __call__(self, parser: Parser) -> CombinatorResult:
+    def __call__(self, parser: Parser, context: AbstractParselet) -> CombinatorResult:
         items = []
         error = None
+        namespace = {}
         while True:
             try:
                 with parser.backtrack():
-                    result, last_error = self.combinator(parser)
+                    result, last_namespace, last_error = self.combinator(parser, context)
             except ParserError as last_error:
                 error = ParserError.merge(error, last_error)
                 break
             else:
                 error = ParserError.merge(error, last_error)
                 items.append(result)
-        return tuple(items), error
+                for name, value in last_namespace.items():
+                    namespace[name] = [*namespace[name], *value] if name in namespace else value
+        return tuple(items), namespace, error
 
 
 def flat_combinator(combinator: Union[Combinator, SymbolID]) -> Combinator:
@@ -273,15 +289,18 @@ def make_repeat(*combinators: Union[Combinator, SymbolID]) -> Combinator:
     return RepeatCombinator(make_sequence(*combinators))
 
 
-def sequence(parser: Parser, combinators: Iterable[Combinator]) -> CombinatorResult:
+def sequence(parser: Parser, context: AbstractParselet, combinators: Iterable[Combinator]) -> CombinatorResult:
     result = None
     error = None
+    namespace = {}
     for combinator in combinators:
         try:
-            result, last_error = combinator(parser)
+            result, last_namespace, last_error = combinator(parser, context)
         except ParserError as last_error:
             raise ParserError.merge(error, last_error)
         else:
             error = ParserError.merge(error, last_error)
+            for name, value in last_namespace.items():
+                namespace[name] = [*namespace[name], *value] if name in namespace else value
 
-    return result, error
+    return result, namespace, error

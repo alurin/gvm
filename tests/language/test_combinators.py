@@ -65,7 +65,7 @@ def test_make_token():
     assert isinstance(comb, TokenCombinator)
     assert comb.token_id == name_id
     assert comb.result_type == SyntaxToken
-    assert comb.compute_variables() == {}
+    assert comb.variables == {}
 
 
 def test_make_parselet():
@@ -76,7 +76,7 @@ def test_make_parselet():
     assert isinstance(comb, ParseletCombinator)
     assert comb.parser_id == name_id
     assert comb.result_type == SyntaxNode
-    assert comb.compute_variables() == {}
+    assert comb.variables == {}
 
 
 def test_make_sequence():
@@ -131,35 +131,29 @@ def test_variables():
 
     # name: Name
     comb = make_named('name', name_id)
-    variables = comb.compute_variables()
-    assert 'name' in variables
-    assert variables['name'] == SyntaxToken
+    assert 'name' in comb.variables
+    assert comb.variables['name'] == SyntaxToken
 
     # names: Name names: Name
     comb = make_sequence(make_named('names', name_id), make_named('names', name_id))
-    variables = comb.compute_variables()
-    assert 'names' in variables
-    assert variables['names'] == Sequence[SyntaxToken]
+    assert 'names' in comb.variables
+    assert comb.variables['names'] == Sequence[SyntaxToken]
 
     # [ name: Name ]
     comb = make_optional(make_named('name', name_id))
-    variables = comb.compute_variables()
-    assert 'name' in variables
-    assert variables['name'] == Optional[SyntaxToken]
+    assert 'name' in comb.variables
+    assert comb.variables['name'] == Optional[SyntaxToken]
 
     # { name: Name }
     comb = make_repeat(make_named('names', name_id))
-    variables = comb.compute_variables()
-    assert variables['names'] == Sequence[SyntaxToken]
+    assert comb.variables['names'] == Sequence[SyntaxToken]
 
     # names: Name { names: Name }
     comb = make_sequence(make_named('names', name_id), make_repeat(make_named('names', name_id)))
-    variables = comb.compute_variables()
-    assert 'names' in variables
-    assert variables['names'] == Sequence[SyntaxToken]
+    assert 'names' in comb.variables
+    assert comb.variables['names'] == Sequence[SyntaxToken]
 
     # names: { Name }
     comb = make_named('names', make_repeat(name_id))
-    variables = comb.compute_variables()
-    assert 'names' in variables
-    assert variables['names'] == Sequence[SyntaxToken]
+    assert 'names' in comb.variables
+    assert comb.variables['names'] == Sequence[SyntaxToken]
