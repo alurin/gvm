@@ -9,6 +9,7 @@ import pytest
 
 from gvm.language.combinators import make_sequence, make_optional, make_named
 from gvm.language.grammar import Grammar, PRIORITY_MAX, ParseletKind, GrammarError, PrattTable
+from gvm.language.syntax import SyntaxToken
 
 
 def test_add_token():
@@ -133,7 +134,7 @@ def test_add_incorrect_parselet():
 
 def test_add_packrat_parser():
     grammar = Grammar()
-    stmt_id = grammar.add_parselet('stmt', kind=ParseletKind.Packrat)
+    stmt_id = grammar.add_parselet('stmt', kind=ParseletKind.Packrat, result_type=SyntaxToken)
     star_id = grammar.add_implicit('*')
 
     assert grammar.add_parser(stmt_id, make_sequence(grammar.add_implicit('('), stmt_id, grammar.add_implicit(')')))
@@ -144,7 +145,7 @@ def test_add_packrat_parser():
 
 def test_add_pratt_parser():
     grammar = Grammar()
-    expr_id = grammar.add_parselet('expr', kind=ParseletKind.Pratt)
+    expr_id = grammar.add_parselet('expr', kind=ParseletKind.Pratt, result_type=SyntaxToken)
     integer_id = grammar.add_token('Integer')
     string_id = grammar.add_token('String')
     plus_id = grammar.add_implicit('+')
@@ -163,8 +164,8 @@ def test_add_pratt_parser():
 
 def test_add_incorrect_pratt_parser():
     grammar = Grammar()
-    stmt_id = grammar.add_parselet('stmt', kind=ParseletKind.Pratt)
-    expr_id = grammar.add_parselet('expr', kind=ParseletKind.Pratt)
+    stmt_id = grammar.add_parselet('stmt', kind=ParseletKind.Pratt, result_type=SyntaxToken)
+    expr_id = grammar.add_parselet('expr', kind=ParseletKind.Pratt, result_type=SyntaxToken)
     integer_id = grammar.add_token('Integer')
 
     with pytest.raises(GrammarError):

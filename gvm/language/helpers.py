@@ -3,13 +3,13 @@
 # This software may be modified and distributed under the terms
 # of the MIT license. See the LICENSE file for details.
 import ast
-from typing import Sequence
+from typing import Sequence, Optional
 
 import attr
 
 from gvm.core import create_core_grammar
 from gvm.exceptions import DiagnosticError
-from gvm.language.actions import make_ctor, make_return_attribute
+from gvm.language.actions import make_ctor, make_return_variable
 from gvm.language.combinators import make_sequence, make_repeat, make_named, Combinator, make_optional, make_token, \
     make_parselet
 from gvm.language.grammar import Grammar
@@ -33,6 +33,7 @@ class NamedNode(CombinatorNode):
 @attr.dataclass
 class ReferenceNode(CombinatorNode):
     name: SyntaxToken
+    priority: Optional[SyntaxNode] = None
 
 
 @attr.dataclass
@@ -67,6 +68,7 @@ def create_combinator_grammar() -> Grammar:
     # tokens
     name_id = grammar.tokens['Name']
     string_id = grammar.tokens['String']
+    number_id = grammar.tokens['Integer']
     colon_id = grammar.add_implicit(':')
     parent_open_id = grammar.tokens['(']
     parent_close_id = grammar.tokens[')']
@@ -74,6 +76,8 @@ def create_combinator_grammar() -> Grammar:
     square_close_id = grammar.tokens[']']
     curly_open_id = grammar.tokens['{']
     curly_close_id = grammar.tokens['}']
+    less_id = grammar.tokens['<']
+    great_id = grammar.tokens['>']
 
     # parse combinator definition
     comb_id = grammar.add_parselet('combinator', result_type=CombinatorNode)
@@ -86,8 +90,12 @@ def create_combinator_grammar() -> Grammar:
         make_ctor(NamedNode)
     )
 
-    # combinator := name: Name                                      ; reference to parselet or token
-    grammar.add_parser(comb_id, make_named('name', name_id), make_ctor(ReferenceNode))
+    # combinator := name: Name  [ '<' priority: Number '>' ]        ; reference to parselet or token
+    grammar.add_parser(
+        comb_id,
+        make_sequence(make_named('name', name_id), make_optional(less_id, make_named('priority', number_id), great_id)),
+        make_ctor(ReferenceNode)
+    )
 
     # combinator := value: String                                   ; reference to implicit token
     grammar.add_parser(comb_id, make_named('value', string_id), make_ctor(ImplicitNode))
@@ -110,7 +118,7 @@ def create_combinator_grammar() -> Grammar:
     grammar.add_parser(
         comb_id,
         make_sequence(parent_open_id, make_named('combinator', seq_id), parent_close_id),
-        make_return_attribute('combinator')
+        make_return_variable('combinator')
     )
 
     # combinator_sequence := combinators:combinator combinators:{ combinator }              ; sequence combinator
@@ -147,9 +155,12 @@ def convert_node(grammar: Grammar, node: CombinatorNode, location: Location) -> 
     if isinstance(node, ReferenceNode):
         name = node.name.value
         if name in grammar.tokens:
+            if node.priority:
+                raise DiagnosticError(location, f'Token combinator can not have priority')
             return make_token(grammar.tokens[name])
         elif name in grammar.parselets:
-            return make_parselet(grammar.parselets[name])
+            priority = node.priority and ast.literal_eval(node.priority.value)
+            return make_parselet(grammar.parselets[name], priority)
         else:
             raise DiagnosticError(location, f"Not found symbol {name} in grammar")
 

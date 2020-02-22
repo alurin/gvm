@@ -23,7 +23,7 @@ from gvm.language.combinators import Combinator, SequenceCombinator, TokenCombin
 from gvm.language.parser import Parser, ParserError
 from gvm.language.syntax import SyntaxNode
 from gvm.locations import Location, py_location
-from gvm.typing import make_default_mutable_value, is_sequence_type
+from gvm.typing import make_default_mutable_value, is_sequence_type, is_subclass
 from gvm.utils import camel_case_to_lower, cached_property
 
 RE_TOKEN = re.compile('[A-Z][a-zA-Z0-9]*')
@@ -216,7 +216,7 @@ class Grammar:
         action = generator(combinator)
 
         # check result of action with ret
-        if action.result_type != parser_id.result_type and not issubclass(action.result_type, parser_id.result_type):
+        if not is_subclass(action.result_type, parser_id.result_type):
             raise GrammarError(
                 location,
                 f'Can not add parser to parselet because return types is different: '
@@ -443,6 +443,6 @@ class PostfixParselet(AbstractParselet):
     """ Postfix parselet, e.g. postfix rule in Pratt """
 
     def __call__(self, parser: Parser, left: SyntaxNode) -> ParseletResult:
-        result, namespace, error = self.combinator(parser, self)
+        result, namespace, error = cast(PostfixCombinator, self.combinator).fixme(parser, self, left)
         result = self.action(result, self.merge_namespace(namespace))
         return result, error

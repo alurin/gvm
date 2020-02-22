@@ -5,10 +5,9 @@
 import pytest
 
 from gvm.language import DefaultScanner
-from gvm.language.combinators import make_sequence, make_named
+from gvm.language.actions import make_call, make_return_variable
 from gvm.language.grammar import Grammar, ParseletKind
 from gvm.language.parser import Parser, ParserError
-from gvm.language.syntax import SyntaxToken
 
 
 @pytest.fixture
@@ -19,81 +18,80 @@ def grammar() -> Grammar:
     grammar.add_trivia(whitespace_id)
 
     grammar.add_pattern(grammar.add_token('Name'), r'[a-zA-Z_][a-zA-Z0-9]*')
-    number_id = grammar.add_pattern(grammar.add_token('Number'), r'[0-9]+')
-    expr_id = grammar.add_parselet('expr', kind=ParseletKind.Pratt)
+    grammar.add_pattern(grammar.add_token('Number'), r'[0-9]+')
 
     make_implicit = grammar.add_implicit
 
-    # unary(OP) := op:OP value:expr
-    make_unary = lambda x: make_sequence(make_named('op', make_implicit(x)), make_named('value', expr_id))
-
-    # binary(OP) := lhs:expr op:OP rhs:expr
-    make_binary = lambda x: make_sequence(
-        make_named('lhs', expr_id),
-        make_named('op', make_implicit(x)),
-        make_named('rhs', expr_id)
-    )
+    expr_id = grammar.add_parselet('expr', kind=ParseletKind.Pratt, result_type=object)
 
     # expr := value:Number
-    grammar.add_parser(expr_id, make_named('value', number_id))
+    grammar.add_parser(expr_id, "value:Number", make_call(lambda value: value.value, object))
 
     # expr := lhs:expr op:'+' rhs:expr
-    grammar.add_parser(expr_id, make_binary('+'), priority=100)
+    grammar.add_parser(
+        expr_id, 'lhs:expr "**" rhs:expr <899>', make_call(lambda lhs, rhs: (lhs, '**', rhs), object), priority=900)
+
+    # expr := lhs:expr op:'+' rhs:expr
+    grammar.add_parser(
+        expr_id, 'lhs:expr "+" rhs:expr <600>', make_call(lambda lhs, rhs: (lhs, '+', rhs), object), priority=600)
 
     # expr := lhs:expr op:'-' rhs:expr
-    grammar.add_parser(expr_id, make_binary('-'), priority=100)
+    grammar.add_parser(
+        expr_id, 'lhs:expr "-" rhs:expr <600>', make_call(lambda lhs, rhs: (lhs, '-', rhs), object), priority=600)
 
     # expr := lhs:expr op:'*' rhs:expr
-    grammar.add_parser(expr_id, make_binary('*'), priority=200)
+    grammar.add_parser(
+        expr_id, 'lhs:expr "*" rhs:expr <700>', make_call(lambda lhs, rhs: (lhs, '*', rhs), object), priority=700)
 
     # expr := lhs:expr op:'/' rhs:expr
-    grammar.add_parser(expr_id, make_binary('/'), priority=200)
+    grammar.add_parser(
+        expr_id, 'lhs:expr "/" rhs:expr <700>', make_call(lambda lhs, rhs: (lhs, '/', rhs), object), priority=700)
 
     # expr := op:'-' value:expr
-    grammar.add_parser(expr_id, make_unary('-'))
+    grammar.add_parser(expr_id, '"-" value:expr <800>', make_call(lambda value: ('-', value), object))
 
     # expr := op:'-' value:expr
-    grammar.add_parser(expr_id, make_unary('+'))
+    grammar.add_parser(expr_id, '"+" value:expr <800>', make_call(lambda value: ('+', value), object))
 
     # expr := '(' value:expr ')'
-    grammar.add_parser(expr_id, make_sequence(make_implicit('('), make_named('value', expr_id), make_implicit(')')))
+    grammar.add_parser(expr_id, '"(" value:expr ")"', make_return_variable('value'))
 
     return grammar
-
-
-def convert_expr(expr: object) -> object:
-    if isinstance(expr, tuple):
-        return tuple(convert_expr(child) for child in expr)
-    if isinstance(expr, SyntaxToken):
-        return expr.value
-    return expr
 
 
 def parse_expr(grammar: Grammar, content: str):
     scanner = DefaultScanner(grammar, '<example>', content)
     parser = Parser(scanner)
     result = parser.parse(grammar.parselets['expr'])
-    return convert_expr(result)
+    return result
 
 
 def test_pratt_expr_parser(grammar: Grammar):
     # prefix and unary expr
-    assert '1' == parse_expr(grammar, '1')
-    assert ('+', '1') == parse_expr(grammar, '+1')
-    assert ('-', '1') == parse_expr(grammar, '-1')
-    assert '1' == parse_expr(grammar, '(1)')
+    assert parse_expr(grammar, '1') == '1'
+    assert parse_expr(grammar, '+1') == ('+', '1')
+    assert parse_expr(grammar, '-1') == ('-', '1')
+    assert parse_expr(grammar, '(1)') == '1'
 
     # postfix and binary expr
-    assert ('1', '+', '2') == parse_expr(grammar, '1 + 2')
-    assert ('1', '-', '2') == parse_expr(grammar, '1 - 2')
-    assert ('1', '*', '2') == parse_expr(grammar, '1 * 2')
-    assert ('1', '/', '2') == parse_expr(grammar, '1 / 2')
+    assert parse_expr(grammar, '1 + 2') == ('1', '+', '2')
+    assert parse_expr(grammar, '1 - 2') == ('1', '-', '2')
+    assert parse_expr(grammar, '1 * 2') == ('1', '*', '2')
+    assert parse_expr(grammar, '1 / 2') == ('1', '/', '2')
+
+    # priority parsers, e.g. associativity and precedence
+    assert parse_expr(grammar, '1 + 2 + 3') == (('1', '+', '2'), '+', '3')
+    assert parse_expr(grammar, '1 * 2 * 3') == (('1', '*', '2'), '*', '3')
+    assert parse_expr(grammar, '1 ** 2 ** 3') == ('1', '**', ('2', '**', '3'))
+
+    assert parse_expr(grammar, '1 + 2 * 3') == ('1', '+', ('2', '*', '3'))
+    assert parse_expr(grammar, '1 * 2 + 3') == (('1', '*', '2'), '+', '3')
 
     # complex expr
-    assert ('-', ('1', '+', ('-', '2'))) == parse_expr(grammar, '-(1 + -2)')
-    assert ('1', '-', ('2', '/', '3')) == parse_expr(grammar, '(1 - 2 / 3)')
-    assert (('-', '1'), '+', '2') == parse_expr(grammar, '-1 * 2')
-    assert (('4', '*', ('+', '1')), '/', '2') == parse_expr(grammar, '(4 * +1) / 2')
+    assert parse_expr(grammar, '-(1 + -2)') == ('-', ('1', '+', ('-', '2')))
+    assert parse_expr(grammar, '(1 - 2 / 3)') == ('1', '-', ('2', '/', '3'))
+    assert parse_expr(grammar, '-1 * 2') == (('-', '1'), '*', '2')
+    assert parse_expr(grammar, '(4 * +1) / 2') == (('4', '*', ('+', '1')), '/', '2')
 
 
 def test_expr_parse_invalid_name(grammar: Grammar):

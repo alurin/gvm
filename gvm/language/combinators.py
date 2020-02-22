@@ -142,6 +142,15 @@ class PostfixCombinator(SequenceCombinator):
     def __call__(self, parser: Parser, context: AbstractParselet) -> CombinatorResult:
         return sequence(parser, context, itertools.islice(self.combinators, 1, None))
 
+    def fixme(self, parser: Parser, context: AbstractParselet, left: object) -> CombinatorResult:
+        """ this method is used for fix recursive call in first nested combinator """
+        result, namespace, error = self(parser, context)
+        first_combinator = self.combinators[0]
+        if isinstance(first_combinator, NamedCombinator):
+            # noinspection PyUnresolvedReferences
+            namespace.update(first_combinator.make_namespace(context, left))
+        return result, namespace, error
+
 
 @attr.dataclass
 class NamedCombinator(NestedCombinator):
@@ -157,13 +166,15 @@ class NamedCombinator(NestedCombinator):
 
     def __call__(self, parser: Parser, context: AbstractParselet) -> CombinatorResult:
         result, _, error = self.combinator(parser, context)
-        if is_sequence_type(self.combinator.result_type):
-            namespace = {self.name: result}
-        elif is_sequence_type(context.variables[self.name]):
-            namespace = {self.name: (result,)}
-        else:
-            namespace = {self.name: result}
+        namespace = self.make_namespace(context, result)
         return result, namespace, error
+
+    def make_namespace(self, context: AbstractParselet, result: object) -> Mapping[str, object]:
+        if is_sequence_type(self.combinator.result_type):
+            return {self.name: result}
+        elif is_sequence_type(context.variables[self.name]):
+            return {self.name: (result,)}
+        return {self.name: result}
 
 
 @attr.dataclass

@@ -43,6 +43,8 @@ def create_core_grammar() -> Grammar:
     grammar.add_implicit(']')
     grammar.add_implicit('{')
     grammar.add_implicit('}')
+    grammar.add_implicit('<')
+    grammar.add_implicit('>')
 
     grammar.add_trivia(grammar.tokens['Comment'])
     grammar.add_trivia(grammar.tokens['Whitespace'])

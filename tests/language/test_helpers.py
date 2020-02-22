@@ -2,6 +2,9 @@
 #
 # This software may be modified and distributed under the terms
 # of the MIT license. See the LICENSE file for details.
+import pytest
+
+from gvm.exceptions import DiagnosticError
 from gvm.language import Grammar
 from gvm.language.combinators import TokenCombinator, ParseletCombinator, OptionalCombinator, RepeatCombinator, \
     NamedCombinator
@@ -17,6 +20,14 @@ def test_parse_token_combinator():
     assert result.token_id == token_id
 
 
+def test_parse_token_priority_fail_combinator():
+    # comb := NAME
+    grammar = Grammar()
+    grammar.add_token('Name')
+    with pytest.raises(DiagnosticError):
+        make_combinator(grammar, 'Name <100>')
+
+
 def test_parse_parselet_combinator():
     # comb := NAME
     grammar = Grammar()
@@ -24,6 +35,17 @@ def test_parse_parselet_combinator():
     result = make_combinator(grammar, 'name')
     assert isinstance(result, ParseletCombinator)
     assert result.parser_id == parser_id
+    assert result.priority is None
+
+
+def test_parse_parselet_with_priority_combinator():
+    # comb := NAME
+    grammar = Grammar()
+    parser_id = grammar.add_parselet('name')
+    result = make_combinator(grammar, 'name <100>')
+    assert isinstance(result, ParseletCombinator)
+    assert result.parser_id == parser_id
+    assert result.priority == 100
 
 
 def test_parse_existed_implicit_combinator():

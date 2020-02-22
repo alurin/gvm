@@ -80,13 +80,13 @@ def make_return_result() -> ActionGenerator:
     return make_action
 
 
-def make_return_attribute(name: str) -> ActionGenerator:
+def make_return_variable(name: str) -> ActionGenerator:
     """ Returns action that returns value of variable as result of parselet """
 
     def make_action(combinator: Combinator):
         variables = combinator.variables
         result_type = variables[name]
-        return ReturnVariableAction(variables, result_type)
+        return ReturnVariableAction(name, result_type)
 
     return make_action
 

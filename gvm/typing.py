@@ -46,3 +46,17 @@ def make_default_mutable_value(typ: Type) -> object:
     if is_sequence_type(typ):
         return []
     return None
+
+
+def is_subclass(lhs: Type, rhs: Type) -> object:
+    if is_sequence_type(lhs):
+        if not is_sequence_type(rhs):
+            return False
+        return is_subclass(unpack_type_arguments(lhs), unpack_type_arguments(rhs))
+
+    if is_optional_type(lhs):
+        if not is_optional_type(rhs):
+            return False
+        return is_subclass(unpack_type_arguments(lhs), unpack_type_arguments(rhs))
+
+    return issubclass(lhs, rhs)
