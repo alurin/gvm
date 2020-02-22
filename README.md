@@ -1,6 +1,4 @@
-GVM
-===
-
+# GVM [![Build Status](https://travis-ci.org/alurin/gvm.svg?branch=master)](https://travis-ci.org/alurin/gvm/)
 This project contains my experimental project with extendable 
 syntax grammar.
 
