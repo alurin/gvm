@@ -35,13 +35,13 @@ def create_combinator_grammar() -> Grammar:
     # combinator := Name { "." Name }                   ; reference to parselet or token
     grammar.add_parser(comb_id, make_sequence(name_id, make_repeat(dot_id, name_id)))
 
-    # combinator := String                              ; reference to implicit token
+    # combinator := value: String                       ; reference to implicit token
     grammar.add_parser(comb_id, string_id)
 
-    # combinator := '[' combinator_sequence ']'         ; optional combinator
+    # combinator := '[' combinator: combinator_sequence ']'         ; optional combinator
     grammar.add_parser(comb_id, make_sequence(square_left_id, seq_id, square_right_id))
 
-    # combinator := '{' combinator_sequence '}'         ; repeat combinator
+    # combinator := '{' combinator: combinator_sequence '}'         ; repeat combinator
     grammar.add_parser(comb_id, make_sequence(curly_left_id, seq_id, curly_right_id))
 
     # combinator_sequence := combinator { combinator }  ; sequence combinator

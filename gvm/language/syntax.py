@@ -21,4 +21,6 @@ class SyntaxToken:
     location: Location
 
 
-SyntaxNode = None
+@attr.dataclass
+class SyntaxNode:
+    pass

@@ -5,9 +5,10 @@
 import pytest
 
 from gvm.language import DefaultScanner
-from gvm.language.combinators import make_sequence
+from gvm.language.combinators import make_sequence, make_named
 from gvm.language.grammar import Grammar, ParseletKind
 from gvm.language.parser import Parser, ParserError
+from gvm.language.syntax import SyntaxToken
 
 
 @pytest.fixture
@@ -21,52 +22,78 @@ def grammar() -> Grammar:
     number_id = grammar.add_pattern(grammar.add_token('Number'), r'[0-9]+')
     expr_id = grammar.add_parselet('expr', kind=ParseletKind.Pratt)
 
-    implicit = grammar.add_implicit
+    make_implicit = grammar.add_implicit
 
-    # expr := Number
-    grammar.add_parser(expr_id, number_id)
-    # expr := expr '+' expr
-    grammar.add_parser(expr_id, make_sequence(expr_id, implicit('+'), expr_id), priority=100)
-    # expr := expr '-' expr
-    grammar.add_parser(expr_id, make_sequence(expr_id, implicit('-'), expr_id), priority=100)
-    # expr := expr '*' expr
-    grammar.add_parser(expr_id, make_sequence(expr_id, implicit('*'), expr_id), priority=200)
-    # expr := expr '/' expr
-    grammar.add_parser(expr_id, make_sequence(expr_id, implicit('/'), expr_id), priority=200)
-    # expr := '-' expr
-    grammar.add_parser(expr_id, make_sequence(implicit('-'), expr_id))
-    # expr := '-' expr
-    grammar.add_parser(expr_id, make_sequence(implicit('+'), expr_id))
-    # expr := '(' expr ')'
-    grammar.add_parser(expr_id, make_sequence(implicit('('), expr_id, implicit(')')))
+    # unary(OP) := op:OP value:expr
+    make_unary = lambda x: make_sequence(make_named('op', make_implicit(x)), make_named('value', expr_id))
+
+    # binary(OP) := lhs:expr op:OP rhs:expr
+    make_binary = lambda x: make_sequence(
+        make_named('lhs', expr_id),
+        make_named('op', make_implicit(x)),
+        make_named('rhs', expr_id)
+    )
+
+    # expr := value:Number
+    grammar.add_parser(expr_id, make_named('value', number_id))
+
+    # expr := lhs:expr op:'+' rhs:expr
+    grammar.add_parser(expr_id, make_binary('+'), priority=100)
+
+    # expr := lhs:expr op:'-' rhs:expr
+    grammar.add_parser(expr_id, make_binary('-'), priority=100)
+
+    # expr := lhs:expr op:'*' rhs:expr
+    grammar.add_parser(expr_id, make_binary('*'), priority=200)
+
+    # expr := lhs:expr op:'/' rhs:expr
+    grammar.add_parser(expr_id, make_binary('/'), priority=200)
+
+    # expr := op:'-' value:expr
+    grammar.add_parser(expr_id, make_unary('-'))
+
+    # expr := op:'-' value:expr
+    grammar.add_parser(expr_id, make_unary('+'))
+
+    # expr := '(' value:expr ')'
+    grammar.add_parser(expr_id, make_sequence(make_implicit('('), make_named('value', expr_id), make_implicit(')')))
 
     return grammar
+
+
+def convert_expr(expr: object) -> object:
+    if isinstance(expr, tuple):
+        return tuple(convert_expr(child) for child in expr)
+    if isinstance(expr, SyntaxToken):
+        return expr.value
+    return expr
 
 
 def parse_expr(grammar: Grammar, content: str):
     scanner = DefaultScanner(grammar, '<example>', content)
     parser = Parser(scanner)
-    return parser.parse(grammar.parselets['expr'])
+    result = parser.parse(grammar.parselets['expr'])
+    return convert_expr(result)
 
 
 def test_pratt_expr_parser(grammar: Grammar):
     # prefix and unary expr
-    parse_expr(grammar, '1')
-    parse_expr(grammar, '+1')
-    parse_expr(grammar, '-1')
-    parse_expr(grammar, '(1)')
+    assert '1' == parse_expr(grammar, '1')
+    assert ('+', '1') == parse_expr(grammar, '+1')
+    assert ('-', '1') == parse_expr(grammar, '-1')
+    assert '1' == parse_expr(grammar, '(1)')
 
     # postfix and binary expr
-    parse_expr(grammar, '1 + 2')
-    parse_expr(grammar, '1 - 2')
-    parse_expr(grammar, '1 * 2')
-    parse_expr(grammar, '1 / 2')
+    assert ('1', '+', '2') == parse_expr(grammar, '1 + 2')
+    assert ('1', '-', '2') == parse_expr(grammar, '1 - 2')
+    assert ('1', '*', '2') == parse_expr(grammar, '1 * 2')
+    assert ('1', '/', '2') == parse_expr(grammar, '1 / 2')
 
     # complex expr
-    parse_expr(grammar, '-(1 + -2)')
-    parse_expr(grammar, '(1 - 2 / 3)')
-    parse_expr(grammar, '-1 * 2')
-    parse_expr(grammar, '(4 * +1) / 2')
+    assert ('-', ('1', '+', ('-', '2'))) == parse_expr(grammar, '-(1 + -2)')
+    assert ('1', '-', ('2', '/', '3')) == parse_expr(grammar, '(1 - 2 / 3)')
+    assert (('-', '1'), '+', '2') == parse_expr(grammar, '-1 * 2')
+    assert (('4', '*', ('+', '1')), '/', '2') == parse_expr(grammar, '(4 * +1) / 2')
 
 
 def test_expr_parse_invalid_name(grammar: Grammar):

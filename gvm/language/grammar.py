@@ -17,7 +17,7 @@ import attr
 
 from gvm.exceptions import DiagnosticError
 from gvm.language.combinators import Combinator, SequenceCombinator, TokenCombinator, ParseletCombinator, \
-    flat_combinator, PostfixCombinator
+    flat_combinator, PostfixCombinator, NamedCombinator
 from gvm.language.parser import Parser, ParserError
 from gvm.language.syntax import SyntaxNode
 from gvm.locations import Location, py_location
@@ -302,6 +302,8 @@ class PrattTable(ParseletTable):
     def add_parser(self, combinator: Combinator, priority: int, location: Location) -> AbstractParselet:
         if isinstance(combinator, SequenceCombinator):
             front_combinator = combinator[0]
+            if isinstance(front_combinator, NamedCombinator):
+                front_combinator = front_combinator.combinator
             if isinstance(front_combinator, TokenCombinator):
                 return self.__add_prefix(front_combinator.token_id, combinator, priority, location)
 
@@ -309,13 +311,18 @@ class PrattTable(ParseletTable):
                 if front_combinator.parser_id == self.parser_id:
                     if len(combinator) > 1:
                         second_combinator = combinator[1]
+                        if isinstance(second_combinator, NamedCombinator):
+                            second_combinator = second_combinator.combinator
                         if isinstance(second_combinator, TokenCombinator):
                             return self.__add_postfix(second_combinator.token_id, combinator, priority, location)
                     else:
                         raise GrammarError(location, "Second combinator for Pratt postfix parselet must be token")
-
-        elif isinstance(combinator, TokenCombinator):
-            return self.__add_prefix(combinator.token_id, combinator, priority, location)
+        else:
+            front_combinator = combinator
+            if isinstance(front_combinator, NamedCombinator):
+                front_combinator = front_combinator.combinator
+            if isinstance(front_combinator, TokenCombinator):
+                return self.__add_prefix(front_combinator.token_id, combinator, priority, location)
 
         raise GrammarError(location, "First combinator for Pratt parselet must be self parser or token")
 

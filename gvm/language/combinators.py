@@ -6,9 +6,11 @@ from __future__ import annotations
 
 import abc
 import itertools
-from typing import Sequence, overload, Iterator, Optional, Union, Type, Tuple, TYPE_CHECKING, Iterable
+from typing import Sequence, overload, Iterator, Optional, Union, Type, Tuple, TYPE_CHECKING, Iterable, Mapping
 
 import attr
+
+from gvm.typing import merge_sequence_type, make_optional_type, make_sequence_type
 
 if TYPE_CHECKING:
     from gvm.language.grammar import SymbolID, TokenID, ParseletID
@@ -18,8 +20,20 @@ from gvm.language.syntax import SyntaxNode, SyntaxToken
 CombinatorResult = Tuple[Union[SyntaxNode, SyntaxToken, tuple, None], Optional[ParserError]]
 
 
+# args := [ args:expr { ',' args:expr } [','] ]
+#   args: Sequence[?] = []
+
+
 @attr.dataclass
 class Combinator(abc.ABC):
+    def compute_variables(self) -> Mapping[str, Type]:
+        return {}
+
+    @property
+    @abc.abstractmethod
+    def result_type(self) -> Type:
+        raise NotImplementedError
+
     @abc.abstractmethod
     def __call__(self, parser: Parser) -> CombinatorResult:
         raise NotImplementedError
@@ -32,8 +46,16 @@ class NestedCombinator(Combinator, abc.ABC):
 
 @attr.dataclass
 class TokenCombinator(Combinator):
-    """ This combinator consume token from input sequence or failed """
+    """
+    This combinator is match token by it's identifier.
+
+    If current token in stream is matched then return syntax token without errors. Otherwise raises parser error
+    """
     token_id: TokenID
+
+    @property
+    def result_type(self) -> Type:
+        return SyntaxToken
 
     def __call__(self, parser: Parser) -> CombinatorResult:
         return parser.consume(self.token_id), None
@@ -41,9 +63,15 @@ class TokenCombinator(Combinator):
 
 @attr.dataclass
 class ParseletCombinator(Combinator):
-    """ This combinator consume result for another parselet or failed """
+    """
+    This combinator is match result of call another parselet.
+    """
     parser_id: ParseletID
     priority: Optional[int] = None
+
+    @property
+    def result_type(self) -> Type:
+        return SyntaxNode
 
     def __call__(self, parser: Parser) -> CombinatorResult:
         return parser.parselet(self.parser_id, self.priority)
@@ -52,9 +80,7 @@ class ParseletCombinator(Combinator):
 @attr.dataclass
 class CollectionCombinator(Combinator, Sequence[Combinator], abc.ABC):
     """
-    This combinator is used for consume results of combinator's sequence.
-
-    If any of combinator from sequence is failed this combinator also failed
+    Abstract base for all combinators that contains sequence of nested combinators.
     """
     combinators: Sequence[Combinator]
 
@@ -74,10 +100,28 @@ class CollectionCombinator(Combinator, Sequence[Combinator], abc.ABC):
 @attr.dataclass
 class SequenceCombinator(CollectionCombinator):
     """
-    This combinator is used for consume results of combinator's sequence.
+    This combinator is match sequence of nested combinators.
 
-    If any of combinator from sequence is failed this combinator also failed
+    If all nested combinators returns without error this combinator return the last result of them.
+
+    If any nested combinator is raised error it's propagated to up combinator
     """
+
+    @property
+    def result_type(self) -> Type:
+        return self.combinators[-1].result_type
+
+    def compute_variables(self) -> Mapping[str, Type]:
+        variables = {}
+        for combinator in self.combinators:
+            nested_variables = combinator.compute_variables()
+            for name, typ in nested_variables.items():
+                if name not in variables:
+                    variables[name] = typ
+                else:
+                    variables[name] = merge_sequence_type(variables[name], typ)
+
+        return variables
 
     def __call__(self, parser: Parser) -> CombinatorResult:
         return sequence(parser, self.combinators)
@@ -86,9 +130,9 @@ class SequenceCombinator(CollectionCombinator):
 @attr.dataclass
 class PostfixCombinator(SequenceCombinator):
     """
-    This combinator is extra version of sequence combinator.
+    This combinator is special version of sequence combinator, that ignored first nested combinator.
 
-    It's combinator is ignored first nested combinator, e.g. don't make recursive call
+    Used only for postfix Pratt, e.g. led action
     """
 
     def __call__(self, parser: Parser) -> CombinatorResult:
@@ -96,37 +140,74 @@ class PostfixCombinator(SequenceCombinator):
 
 
 @attr.dataclass
-class OptionalCombinator(NestedCombinator):
-    """
-    This combinator consumes nothing if nested combinator is failed.
+class NamedCombinator(NestedCombinator):
+    name: str
 
-    Error from nested combinator is propagated to result
-    """
+    @property
+    def result_type(self) -> Type:
+        return self.combinator.result_type
+
+    def compute_variables(self) -> Mapping[str, Type]:
+        return {self.name: self.combinator.result_type}
 
     def __call__(self, parser: Parser) -> CombinatorResult:
-        try:
-            with parser.backtrack():
+        result = self.combinator(parser)
+        return result
+
+
+@attr.dataclass
+class OptionalCombinator(NestedCombinator):
+    """
+    This combinator is
+    This combinator returns result of nested combinator on success and returns None and error on failure
+    """
+
+    @property
+    def result_type(self) -> Type:
+        return Optional[self.combinator.result_type]
+
+    def compute_variables(self) -> Mapping[str, Type]:
+        nested_variables = self.combinator.compute_variables()
+        return {name: make_optional_type(typ) for name, typ in nested_variables.items()}
+
+    def __call__(self, parser: Parser) -> CombinatorResult:
+        with parser.backtrack():
+            try:
                 return self.combinator(parser)
-        except ParserError as error:
-            return None, error
+            except ParserError as error:
+                return None, error
 
 
 @attr.dataclass
 class RepeatCombinator(NestedCombinator):
     """
-    This combinator is used for repeat nested combinator before it falls
+    This combinator match zero or more occurrences of nested combinator.
+
+    Return sequence of values from nested combinator
     """
 
+    @property
+    def result_type(self) -> Type:
+        return Sequence[self.combinator.result_type]
+
+    def compute_variables(self) -> Mapping[str, Type]:
+        nested_variables = self.combinator.compute_variables()
+        return {name: make_sequence_type(typ) for name, typ in nested_variables.items()}
+
     def __call__(self, parser: Parser) -> CombinatorResult:
+        items = []
         error = None
         while True:
             try:
                 with parser.backtrack():
-                    _, last_error = self.combinator(parser)
+                    result, last_error = self.combinator(parser)
             except ParserError as last_error:
-                return None, ParserError.merge(error, last_error)
+                error = ParserError.merge(error, last_error)
+                break
             else:
                 error = ParserError.merge(error, last_error)
+                items.append(result)
+        return tuple(items), error
 
 
 def flat_combinator(combinator: Union[Combinator, SymbolID]) -> Combinator:
@@ -160,6 +241,10 @@ def make_token(token_id: TokenID) -> TokenCombinator:
     return TokenCombinator(token_id)
 
 
+def make_named(name: str, *combinators: Union[Combinator, SymbolID]) -> NamedCombinator:
+    return NamedCombinator(make_sequence(*combinators), name)
+
+
 def make_parselet(parser_id: ParseletID, priority: int = None) -> ParseletCombinator:
     """ Helper for create parselet combinator """
     return ParseletCombinator(parser_id, priority)
@@ -189,13 +274,14 @@ def make_repeat(*combinators: Union[Combinator, SymbolID]) -> Combinator:
 
 
 def sequence(parser: Parser, combinators: Iterable[Combinator]) -> CombinatorResult:
+    result = None
     error = None
     for combinator in combinators:
         try:
-            _, last_error = combinator(parser)
+            result, last_error = combinator(parser)
         except ParserError as last_error:
             raise ParserError.merge(error, last_error)
         else:
             error = ParserError.merge(error, last_error)
 
-    return [], error
+    return result, error

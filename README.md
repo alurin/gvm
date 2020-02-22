@@ -15,7 +15,7 @@ General elements of it's:
 - `gvm.language.ParseletID` - parselet identifier, e.g. non-terminal symbol
 
 Grammar also contains patterns for tokenize from source text to 
-syntax tokens (`gvm.language.SyntaxToken`).
+syntax tokens (`gvm.language.SyntaxToken`). 
 
 
 Example of grammar

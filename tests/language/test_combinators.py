@@ -2,11 +2,15 @@
 #
 # This software may be modified and distributed under the terms
 # of the MIT license. See the LICENSE file for details.
+from typing import Optional, Sequence
+
 import pytest
 
 from gvm.language.combinators import flat_combinator, make_sequence, TokenCombinator, ParseletCombinator, flat_sequence, \
-    SequenceCombinator
+    SequenceCombinator, make_named, make_optional, OptionalCombinator, make_repeat, RepeatCombinator, make_token, \
+    make_parselet
 from gvm.language.grammar import Grammar
+from gvm.language.syntax import SyntaxToken, SyntaxNode
 
 
 def test_flat_combinator():
@@ -53,6 +57,28 @@ def test_flat_sequence():
     assert isinstance(combinators[3], ParseletCombinator)
 
 
+def test_make_token():
+    grammar = Grammar()
+    name_id = grammar.add_token('Name')
+
+    comb = make_token(name_id)
+    assert isinstance(comb, TokenCombinator)
+    assert comb.token_id == name_id
+    assert comb.result_type == SyntaxToken
+    assert comb.compute_variables() == {}
+
+
+def test_make_parselet():
+    grammar = Grammar()
+    name_id = grammar.add_parselet('name')
+
+    comb = make_parselet(name_id)
+    assert isinstance(comb, ParseletCombinator)
+    assert comb.parser_id == name_id
+    assert comb.result_type == SyntaxNode
+    assert comb.compute_variables() == {}
+
+
 def test_make_sequence():
     grammar = Grammar()
     name_id = grammar.add_token('Name')
@@ -63,6 +89,7 @@ def test_make_sequence():
     assert len(comb) == 2
     assert isinstance(comb[0], TokenCombinator)
     assert isinstance(comb[1], ParseletCombinator)
+    assert comb.result_type == SyntaxNode
 
 
 def test_make_sequence_with_single_element():
@@ -76,3 +103,63 @@ def test_make_sequence_with_single_element():
 def test_make_empty_sequence():
     with pytest.raises(ValueError):
         make_sequence()
+
+
+def test_make_optional():
+    grammar = Grammar()
+    name_id = grammar.add_token('Name')
+
+    comb = make_optional(name_id)
+    assert isinstance(comb, OptionalCombinator)
+    assert isinstance(comb.combinator, TokenCombinator)
+    assert comb.result_type == Optional[SyntaxToken]
+
+
+def test_make_repeat():
+    grammar = Grammar()
+    name_id = grammar.add_token('Name')
+
+    comb = make_repeat(name_id)
+    assert isinstance(comb, RepeatCombinator)
+    assert isinstance(comb.combinator, TokenCombinator)
+    assert comb.result_type == Sequence[SyntaxToken]
+
+
+def test_variables():
+    grammar = Grammar()
+    name_id = grammar.add_token('Name')
+
+    # name: Name
+    comb = make_named('name', name_id)
+    variables = comb.compute_variables()
+    assert 'name' in variables
+    assert variables['name'] == SyntaxToken
+
+    # names: Name names: Name
+    comb = make_sequence(make_named('names', name_id), make_named('names', name_id))
+    variables = comb.compute_variables()
+    assert 'names' in variables
+    assert variables['names'] == Sequence[SyntaxToken]
+
+    # [ name: Name ]
+    comb = make_optional(make_named('name', name_id))
+    variables = comb.compute_variables()
+    assert 'name' in variables
+    assert variables['name'] == Optional[SyntaxToken]
+
+    # { name: Name }
+    comb = make_repeat(make_named('names', name_id))
+    variables = comb.compute_variables()
+    assert variables['names'] == Sequence[SyntaxToken]
+
+    # names: Name { names: Name }
+    comb = make_sequence(make_named('names', name_id), make_repeat(make_named('names', name_id)))
+    variables = comb.compute_variables()
+    assert 'names' in variables
+    assert variables['names'] == Sequence[SyntaxToken]
+
+    # names: { Name }
+    comb = make_named('names', make_repeat(name_id))
+    variables = comb.compute_variables()
+    assert 'names' in variables
+    assert variables['names'] == Sequence[SyntaxToken]

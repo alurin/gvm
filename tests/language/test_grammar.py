@@ -7,7 +7,7 @@ from typing import cast
 
 import pytest
 
-from gvm.language.combinators import make_sequence, make_optional
+from gvm.language.combinators import make_sequence, make_optional, make_named
 from gvm.language.grammar import Grammar, PRIORITY_MAX, ParseletKind, GrammarError, PrattTable
 
 
@@ -155,10 +155,10 @@ def test_add_pratt_parser():
     assert table.prefix_tokens == set()
     assert grammar.add_parser(expr_id, integer_id)
     assert integer_id in table.prefix_tokens, "Cleanup of pratt table prefix tokens is not worked"
-    assert grammar.add_parser(expr_id, string_id)
+    assert grammar.add_parser(expr_id, make_named('value', string_id))
     assert string_id in table.prefix_tokens, "Cleanup of pratt table prefix tokens is not worked"
     assert grammar.add_parser(expr_id, make_sequence(expr_id, plus_id, expr_id))
-    assert grammar.add_parser(expr_id, make_sequence(expr_id, star_id, expr_id))
+    assert grammar.add_parser(expr_id, make_sequence(make_named('lhs', expr_id), make_named('op', star_id), expr_id))
 
 
 def test_add_incorrect_pratt_parser():
